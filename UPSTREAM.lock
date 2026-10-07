@@ -1,0 +1,23 @@
+# Pinned upstream for every NESTRA Remote Engine / viewer-core build (Corresponding Source, AGPL-3.0).
+# Verified 2026-10-08 against the GitHub API and the files themselves.
+RUSTDESK_REPO=https://github.com/rustdesk/rustdesk
+RUSTDESK_TAG=1.5.0
+RUSTDESK_COMMIT=fada664df7a294d1d1a9ca3e7cd3637069122f17
+RUSTDESK_COMMIT_DATE=2026-09-30T15:50:12Z
+RUSTDESK_COMMIT_VERIFIED=true
+HBB_COMMON_REPO=https://github.com/rustdesk/hbb_common
+HBB_COMMON_COMMIT=229b904508364c8997aad0fb5af57effac859f60
+# build toolchain pins copied from upstream's own .github/workflows/flutter-build.yml + bridge.yml at RUSTDESK_COMMIT
+VCPKG_COMMIT_ID=9e593bb18ea69cc5095e012465dcd675a822ed0d
+LLVM_VERSION=15.0.6
+WINDOWS_RUST_TOOLCHAIN=nightly-2023-10-13-i686-pc-windows-msvc
+ANDROID_RUST_VERSION=1.75
+ANDROID_NDK_VERSION=r28c
+CARGO_NDK_VERSION=3.1.2
+BRIDGE_FLUTTER_VERSION=3.22.3
+FLUTTER_RUST_BRIDGE_VERSION=1.80.1
+CARGO_EXPAND_VERSION=1.0.95
+# aliases used by nestra/ci/fetch-upstream.sh
+UPSTREAM_REPO=https://github.com/rustdesk/rustdesk
+UPSTREAM_TAG=1.5.0
+UPSTREAM_COMMIT=fada664df7a294d1d1a9ca3e7cd3637069122f17

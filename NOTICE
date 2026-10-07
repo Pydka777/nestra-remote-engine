@@ -1,0 +1,21 @@
+NESTRA Remote Engine and NESTRA Remote for Android
+
+This work is a modified version of RustDesk.
+  RustDesk - https://github.com/rustdesk/rustdesk  (pinned: tag 1.5.0, commit fada664df7a294d1d1a9ca3e7cd3637069122f17)
+  hbb_common - https://github.com/rustdesk/hbb_common (pinned: commit 229b904508364c8997aad0fb5af57effac859f60)
+  Copyright (C) RustDesk contributors / Purslane Tech Pte. Ltd.
+  Licensed under the GNU Affero General Public License v3 (see LICENCE, copied byte-for-byte from upstream,
+  and LICENSES/AGPL-3.0.txt)
+
+Modifications Copyright (C) 2026 NESTRA, licensed under the same terms (AGPL-3.0).
+Modifications: nestra/apply_patches.py (anchored edits of the pinned upstream), nestra/src/*.rs (new upstream-crate
+modules), listed in CHANGES-FROM-UPSTREAM.md; every build also ships the exact change set as nestra-changes.diff.
+
+NESTRA Remote for Android (android/) is distributed as ONE program with the RustDesk client core
+(libnestra_viewer.so) and is therefore licensed as a whole under the GNU AGPL v3; its full source is in android/.
+
+All upstream copyright and licence notices are retained unmodified.
+Third-party components (Rust crates, libvpx, libyuv, opus, aom, Sciter, ...) keep their own licences.
+
+"NESTRA" is a trademark of NESTRA; the AGPL grants no trademark rights (AGPL section 7(e)).
+This software is provided WITHOUT ANY WARRANTY, to the extent permitted by law.

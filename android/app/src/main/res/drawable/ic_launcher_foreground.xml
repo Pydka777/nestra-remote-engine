@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder: a laptop outline with an orange "N" link arc - NESTRA Remote, distinct from the NESTRA Parent mark. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="3.5"
+        android:pathData="M33,38 h42 a3,3 0 0 1 3,3 v24 h-48 v-24 a3,3 0 0 1 3,-3 z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M26,67 h56 l-4,5 h-48 z" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFF8A3D" android:strokeWidth="4" android:strokeLineCap="round"
+        android:pathData="M45,59 v-14 l18,14 v-14" />
+</vector>

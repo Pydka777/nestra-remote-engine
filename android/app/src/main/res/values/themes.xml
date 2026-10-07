@@ -1,0 +1,8 @@
+<resources>
+    <!-- Compose draws the UI; this only sets the window before Compose starts (dark charcoal, no white flash). -->
+    <style name="Theme.NestraRemote" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nr_background</item>
+        <item name="android:statusBarColor">@color/nr_background</item>
+        <item name="android:navigationBarColor">@color/nr_background</item>
+    </style>
+</resources>

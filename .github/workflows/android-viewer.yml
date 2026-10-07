@@ -1,0 +1,191 @@
+# NESTRA Remote viewer core for Android (AGPL-3.0) = pinned upstream RustDesk client core (librustdesk, feature
+# "flutter") + nestra/apply_patches.py (src/nestra_viewer.rs JNI entry points, frame/event hooks).
+# Build recipe copied from upstream's own jobs "generate-bridge" (bridge.yml) and "build-rustdesk-android"
+# (flutter-build.yml) at the pinned commit. GitHub-hosted runners only.
+# Output: nestra-viewer-android.zip = jniLibs/<abi>/libnestra_viewer.so + libc++_shared.so for arm64-v8a,
+# armeabi-v7a, x86_64, with SHA256SUMS, licences and the exact change set.
+name: android-viewer
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  RUSTDESK_REPO: https://github.com/rustdesk/rustdesk
+  RUSTDESK_TAG: "1.5.0"
+  RUSTDESK_COMMIT: fada664df7a294d1d1a9ca3e7cd3637069122f17
+  HBB_COMMON_COMMIT: 229b904508364c8997aad0fb5af57effac859f60
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+  RUST_VERSION: "1.75"
+  NDK_VERSION: r28c
+  CARGO_NDK_VERSION: "3.1.2"
+  BRIDGE_FLUTTER_VERSION: "3.22.3"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+  CARGO_EXPAND_VERSION: "1.0.95"
+jobs:
+  bridge:
+    # flutter_rust_bridge glue that librustdesk (feature "flutter") compiles against; generated from the UNMODIFIED
+    # src/flutter_ffi.rs exactly as upstream does (NESTRA does not change flutter_ffi.rs).
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Fetch the pinned upstream commit
+        run: |
+          git init -q upstream-src && cd upstream-src
+          git remote add origin "$RUSTDESK_REPO"
+          git fetch -q --depth 1 origin "$RUSTDESK_COMMIT" && git checkout -q FETCH_HEAD
+          git submodule update --init --recursive --depth 1
+          test "$(git rev-parse HEAD)" = "$RUSTDESK_COMMIT"
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang cmake curl gcc git g++ libclang-dev libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.BRIDGE_FLUTTER_VERSION }}
+      - name: Generate bridge (as upstream)
+        working-directory: upstream-src
+        run: |
+          cargo install cargo-expand --version $CARGO_EXPAND_VERSION --locked
+          cargo install flutter_rust_bridge_codegen --version $FLUTTER_RUST_BRIDGE_VERSION --features "uuid" --locked
+          sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
+          pushd flutter && flutter pub get && popd
+          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge
+          path: |
+            upstream-src/src/bridge_generated.rs
+            upstream-src/src/bridge_generated.io.rs
+
+  build:
+    needs: bridge
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { target: aarch64-linux-android, abi: arm64-v8a, libcxx: aarch64-linux-android }
+          - { target: armv7-linux-androideabi, abi: armeabi-v7a, libcxx: arm-linux-androideabi }
+          - { target: x86_64-linux-android, abi: x86_64, libcxx: x86_64-linux-android }
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with: { tool-cache: false, android: false, dotnet: true, haskell: true, large-packages: false, docker-images: true, swap-storage: false }
+      - name: Install dependencies (as upstream)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake curl gcc-multilib git g++ g++-multilib libc6-dev libclang-dev libunwind-dev \
+            llvm-dev nasm ninja-build openjdk-17-jdk-headless pkg-config wget
+      - name: Checkout NESTRA engine fork
+        uses: actions/checkout@v4
+        with:
+          path: fork
+      - name: Fetch the pinned upstream commit and verify it
+        run: |
+          git init -q upstream-src && cd upstream-src
+          git remote add origin "$RUSTDESK_REPO"
+          git fetch -q --depth 1 origin "$RUSTDESK_COMMIT" && git checkout -q FETCH_HEAD
+          git submodule update --init --recursive --depth 1
+          test "$(git rev-parse HEAD)" = "$RUSTDESK_COMMIT"
+          test "$(git -C libs/hbb_common rev-parse HEAD)" = "$HBB_COMMON_COMMIT"
+      - name: Apply NESTRA patches (anchored, counted)
+        run: |
+          python3 fork/nestra/tests/test_apply_patches.py
+          cmp fork/LICENCE upstream-src/LICENCE
+          python3 fork/nestra/apply_patches.py upstream-src
+          cd upstream-src && git add -A -N . && git diff > ../nestra-changes.diff && (cd libs/hbb_common && git diff) >> ../nestra-changes.diff
+          grep -c "Java_com_nestra_remote_viewer_NativeViewer_native" src/nestra_viewer.rs
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+      - name: Setup vcpkg (pinned commit, as upstream)
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+      - name: Install vcpkg dependencies (upstream script)
+        working-directory: upstream-src
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          if ! ./flutter/build_android_deps.sh "${{ matrix.job.abi }}"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | head -20 | while read -r f; do echo "== $f"; tail -50 "$f"; done
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridge
+          path: upstream-src/src
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.job.target }}
+          components: rustfmt
+      - name: Build librustdesk with the NESTRA viewer (as upstream ndk_*.sh)
+        working-directory: upstream-src
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo install cargo-ndk --version $CARGO_NDK_VERSION --locked
+          cargo ndk --platform 21 --target ${{ matrix.job.target }} build --locked --release --features flutter,hwcodec
+      - name: Package ${{ matrix.job.abi }}
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -e
+          D=out/jniLibs/${{ matrix.job.abi }}
+          mkdir -p $D
+          cp upstream-src/target/${{ matrix.job.target }}/release/liblibrustdesk.so $D/libnestra_viewer.so
+          cp $NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.job.libcxx }}/libc++_shared.so $D/
+          # the JNI contract of NativeViewer.kt must be exported
+          for f in nativeAbiVersion nativeInit nativeConnect nativeSetSurface nativeMouse nativeKey nativeText nativeClose; do
+            $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --defined-only $D/libnestra_viewer.so | grep -q "Java_com_nestra_remote_viewer_NativeViewer_$f" || { echo "missing JNI symbol $f"; exit 1; }
+          done
+          grep -a -q "remote.nestraparent.com" $D/libnestra_viewer.so
+          ! grep -a -q "rs-ny.rustdesk.com" $D/libnestra_viewer.so
+          (cd out && sha256sum jniLibs/${{ matrix.job.abi }}/*.so)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viewer-${{ matrix.job.abi }}
+          path: out/jniLibs
+
+  package:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fork
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: viewer-*
+          path: out/jniLibs
+          merge-multiple: true
+      - name: Zip + checksums
+        run: |
+          set -e
+          cp fork/LICENSES/AGPL-3.0.txt fork/NOTICE fork/SOURCE.md fork/UPSTREAM.lock fork/CHANGES-FROM-UPSTREAM.md out/
+          {
+            echo "upstream=$RUSTDESK_REPO tag=$RUSTDESK_TAG commit=$RUSTDESK_COMMIT hbb_common=$HBB_COMMON_COMMIT"
+            echo "nestra_fork_commit=$GITHUB_SHA repository=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY run=$GITHUB_RUN_ID"
+            echo "features=flutter,hwcodec abis=arm64-v8a,armeabi-v7a,x86_64"
+          } > out/BUILD-INFO.txt
+          (cd out && find jniLibs -name '*.so' | sort | xargs sha256sum | tee SHA256SUMS)
+          (cd out && zip -qr ../nestra-viewer-android.zip .)
+          sha256sum nestra-viewer-android.zip | tee nestra-viewer-android.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nestra-viewer-android
+          path: |
+            nestra-viewer-android.zip
+            nestra-viewer-android.zip.sha256
+            out/SHA256SUMS

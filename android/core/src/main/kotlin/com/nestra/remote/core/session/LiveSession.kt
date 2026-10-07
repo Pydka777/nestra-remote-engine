@@ -1,0 +1,208 @@
+package com.nestra.remote.core.session
+
+import com.nestra.remote.core.api.ApiResult
+import com.nestra.remote.core.api.SessionStarted
+import com.nestra.remote.core.api.SessionStatus
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+
+/** The three NESTRA Remote calls a live session needs (RemoteSession implements them with token refresh). */
+interface LiveSessionApi {
+    fun startSession(deviceId: String): ApiResult<SessionStarted>
+    fun sessionStatus(sessionId: String): ApiResult<SessionStatus>
+    fun endSession(sessionId: String): ApiResult<Unit>
+}
+
+/**
+ * Where the viewer connects. Built only from a validated server answer: host and key are always NESTRA's own
+ * (RemoteApi.RENDEZVOUS_HOST / SERVER_KEY). The grant is a wipeable copy for the native core; never logged.
+ */
+class ViewerTarget(val engineId: String, val rendezvousHost: String, val serverKey: String, grant: CharArray) {
+    private var g: CharArray? = grant
+    fun grant(): CharArray = g ?: throw IllegalStateException("grant wiped")
+    fun wipe() { g?.fill('\u0000'); g = null }
+    override fun toString() = "ViewerTarget(engine=$engineId, host=$rendezvousHost)"
+}
+
+/**
+ * The remote desktop viewer: the RustDesk core (AGPL-3.0) inside the app, reached through JNI. It renders the REAL
+ * screen of the PC and sends touch/mouse/keyboard input; it must never be replaced by screenshots.
+ * Contract: connect() returns at once; events arrive on any thread; disconnect() is idempotent.
+ */
+interface RemoteViewer {
+    fun connect(target: ViewerTarget, events: Events)
+    fun disconnect()
+    interface Events {
+        /** The engine on the PC accepted the grant: frames and input flow. */
+        fun onConnected()
+        /** The connection is over (closed by the PC, network loss, refused grant, ...). [reason] is a short word. */
+        fun onClosed(reason: String)
+    }
+}
+
+/**
+ * ETAP 9 phone side of ONE live session (no Android API; unit- and real-backend-tested on the JVM):
+ *   request -> laptop accepts (engine ready) -> connect data ONCE -> viewer connects with the one-time grant -> active
+ *   -> keepalive polls -> end on: Disconnect here, viewer closed, server says ended (Disconnect on the PC, Remote
+ *   Access OFF, unpair, sign-out, TTL, ...), token lost. Ending is idempotent and always tells the server.
+ * The app NEVER switches Remote Access on: a refused request just reports why.
+ */
+class LiveSessionController(
+    private val api: LiveSessionApi,
+    private val viewer: RemoteViewer,
+    private val pollMs: Long = 1000,
+    private val keepaliveMs: Long = 15_000,
+    private val connectTimeoutMs: Long = 120_000,
+    private val clock: () -> Long = { System.currentTimeMillis() },
+) {
+    enum class Refusal { REMOTE_ACCESS_DISABLED, DEVICE_OFFLINE, ENGINE_NOT_READY, SESSION_IN_PROGRESS, NOT_FOUND, RATE_LIMITED,
+        SIGNED_OUT, NETWORK, LAPTOP_REFUSED, EXPIRED, UNEXPECTED }
+
+    sealed class State {
+        object Idle : State() { override fun toString() = "Idle" }
+        object Requesting : State() { override fun toString() = "Requesting" }
+        object WaitingForPc : State() { override fun toString() = "WaitingForPc" }
+        object Connecting : State() { override fun toString() = "Connecting" }
+        data class Active(val sinceMs: Long) : State()
+        data class Ended(val reason: String) : State()
+        data class Refused(val why: Refusal, val detail: String? = null) : State()
+    }
+
+    private sealed class Ev {
+        object Connected : Ev()
+        data class Closed(val reason: String) : Ev()
+        object Disconnect : Ev()
+    }
+
+    @Volatile var state: State = State.Idle; private set
+    @Volatile var sessionId: String? = null; private set
+    private val events = LinkedBlockingQueue<Ev>()
+    var listener: ((State) -> Unit)? = null
+
+    private fun set(s: State) { state = s; listener?.invoke(s) }
+
+    /** Phone "Disconnect" (any thread). */
+    fun disconnect() { events.offer(Ev.Disconnect) }
+
+    /** Runs the whole session on the calling (background) thread; returns the final state. */
+    fun run(deviceId: String): State {
+        set(State.Requesting)
+        val sid = when (val r = api.startSession(deviceId)) {
+            is ApiResult.Ok -> r.value.sessionId
+            else -> return refused(r)
+        }
+        sessionId = sid
+        set(State.WaitingForPc)
+
+        // 1) wait for the laptop to accept and the one-time connect data
+        val deadline = clock() + connectTimeoutMs
+        var target: ViewerTarget? = null
+        while (target == null) {
+            if (events.poll() is Ev.Disconnect) return end(sid, "viewer_disconnect", tellViewer = false)
+            when (val st = api.sessionStatus(sid)) {
+                is ApiResult.Ok -> {
+                    val s = st.value
+                    when {
+                        s.connect != null -> {
+                            val c = s.connect
+                            target = ViewerTarget(c.engineId, c.rendezvousHost, c.serverKey, c.takeGrant())
+                        }
+                        s.state == "refused" -> { sessionId = null; return final(State.Refused(Refusal.LAPTOP_REFUSED, s.endReason)) }
+                        s.state == "expired" -> { sessionId = null; return final(State.Refused(Refusal.EXPIRED, s.endReason)) }
+                        s.state == "ended" -> { sessionId = null; return final(State.Ended(s.endReason ?: "ended")) }
+                        s.state == "connecting" || s.state == "active" ->      // data taken by someone else: never reuse
+                            return end(sid, "unexpected", tellViewer = false, result = State.Refused(Refusal.UNEXPECTED, "connect_data_missing"))
+                    }
+                }
+                ApiResult.Unauthorized -> return end(sid, "account_signed_out", tellViewer = false, result = State.Refused(Refusal.SIGNED_OUT))
+                is ApiResult.Error -> return end(sid, "unexpected", tellViewer = false, result = State.Refused(Refusal.UNEXPECTED, st.code))
+                else -> { /* transient: keep polling until the deadline */ }
+            }
+            if (target == null) {
+                if (clock() >= deadline) return end(sid, "expired", tellViewer = false, result = State.Refused(Refusal.EXPIRED))
+                if (events.poll(pollMs, TimeUnit.MILLISECONDS) is Ev.Disconnect) return end(sid, "viewer_disconnect", tellViewer = false)
+            }
+        }
+
+        // 2) the viewer connects with the grant (the controller's copy is wiped right after)
+        set(State.Connecting)
+        try {
+            viewer.connect(target, object : RemoteViewer.Events {
+                override fun onConnected() { events.offer(Ev.Connected) }
+                override fun onClosed(reason: String) { events.offer(Ev.Closed(reason)) }
+            })
+        } catch (e: RuntimeException) {
+            target.wipe()
+            return end(sid, "viewer_failed", tellViewer = false, result = State.Ended("viewer_failed"))
+        }
+        target.wipe()
+
+        // 3) connecting / active: viewer events + status polls (keepalive) until something ends it
+        var active = false
+        var nextPoll = clock()
+        while (true) {
+            val wait = (nextPoll - clock()).coerceAtLeast(0)
+            when (val ev = events.poll(wait, TimeUnit.MILLISECONDS)) {
+                Ev.Connected -> if (!active) { active = true; set(State.Active(clock())) }
+                is Ev.Closed -> return end(sid, if (ev.reason.matches(Regex("^[a-z_]{1,32}$"))) ev.reason else "viewer_closed", tellViewer = false)
+                Ev.Disconnect -> return end(sid, "viewer_disconnect", tellViewer = true)
+                null -> {
+                    nextPoll = clock() + if (active) keepaliveMs else pollMs
+                    when (val st = api.sessionStatus(sid)) {
+                        is ApiResult.Ok -> when (st.value.state) {
+                            "ended", "expired", "refused" -> { viewer.disconnect(); sessionId = null; return final(State.Ended(st.value.endReason ?: st.value.state)) }
+                            else -> st.value.connect?.wipe()
+                        }
+                        ApiResult.Unauthorized, ApiResult.NotFound -> return end(sid, "account_signed_out", tellViewer = true)
+                        else -> { /* transient; the server ends a silent viewer after its keepalive window anyway */ }
+                    }
+                    if (!active && clock() >= deadline) return end(sid, "expired", tellViewer = true, result = State.Refused(Refusal.EXPIRED))
+                }
+            }
+        }
+    }
+
+    private fun refused(r: ApiResult<*>): State = final(State.Refused(when (r) {
+        ApiResult.RemoteAccessDisabled -> Refusal.REMOTE_ACCESS_DISABLED
+        ApiResult.DeviceOffline -> Refusal.DEVICE_OFFLINE
+        ApiResult.EngineNotReady -> Refusal.ENGINE_NOT_READY
+        ApiResult.SessionInProgress -> Refusal.SESSION_IN_PROGRESS
+        ApiResult.NotFound -> Refusal.NOT_FOUND
+        ApiResult.RateLimited -> Refusal.RATE_LIMITED
+        ApiResult.Unauthorized -> Refusal.SIGNED_OUT
+        ApiResult.NetworkError, ApiResult.ServiceUnavailable -> Refusal.NETWORK
+        else -> Refusal.UNEXPECTED
+    }))
+
+    private fun end(sid: String, reason: String, tellViewer: Boolean, result: State = State.Ended(reason)): State {
+        if (tellViewer) viewer.disconnect()
+        api.endSession(sid)                                         // idempotent; best effort (the server also times out)
+        sessionId = null
+        return final(result)
+    }
+
+    private fun final(s: State): State { events.clear(); set(s); return s }
+}
+
+/** What the phone shows for a refusal (the PC-side switch is never touched from the phone). */
+object LiveSessionText {
+    const val REMOTE_ACCESS_DISABLED = "Remote Access is disabled on this PC. Enable it from the NESTRA Remote tray on the PC first."
+    fun refusal(r: LiveSessionController.Refusal, detail: String? = null): String = when (r) {
+        LiveSessionController.Refusal.REMOTE_ACCESS_DISABLED -> REMOTE_ACCESS_DISABLED
+        LiveSessionController.Refusal.DEVICE_OFFLINE -> "This PC is offline. Make sure it is on and connected to the internet."
+        LiveSessionController.Refusal.ENGINE_NOT_READY -> "The remote desktop engine on this PC is not ready. Update NESTRA Remote on the PC."
+        LiveSessionController.Refusal.SESSION_IN_PROGRESS -> "A remote session to this PC is already in progress."
+        LiveSessionController.Refusal.NOT_FOUND -> "This PC is no longer in your account."
+        LiveSessionController.Refusal.RATE_LIMITED -> "Too many attempts. Wait a minute and try again."
+        LiveSessionController.Refusal.SIGNED_OUT -> "You were signed out. Sign in again."
+        LiveSessionController.Refusal.NETWORK -> "No connection to NESTRA Remote. Check your internet connection."
+        LiveSessionController.Refusal.LAPTOP_REFUSED -> when (detail) {
+            "remote_access_off" -> REMOTE_ACCESS_DISABLED
+            "busy" -> "This PC is already in a remote session."
+            "engine_not_installed", "engine_failed" -> "The remote desktop engine on this PC could not start."
+            else -> "The PC refused the session."
+        }
+        LiveSessionController.Refusal.EXPIRED -> "The PC did not answer in time. Try again."
+        LiveSessionController.Refusal.UNEXPECTED -> "The session could not be started."
+    }
+}

@@ -1,0 +1,146 @@
+# NESTRA Remote Engine for Windows (AGPL-3.0) = pinned upstream RustDesk + nestra/apply_patches.py.
+# Build recipe copied from upstream's own job "build-for-windows-sciter" (.github/workflows/flutter-build.yml at
+# the pinned commit): i686 Sciter build, nightly-2023-10-13, 32-bit LLVM 15, vcpkg x86-windows-static.
+# GitHub-hosted runners only. Output: nestra-remote-engine-windows-x86.zip + .sha256 + nestra-changes.diff
+name: engine-windows
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  RUSTDESK_REPO: https://github.com/rustdesk/rustdesk
+  RUSTDESK_TAG: "1.5.0"
+  RUSTDESK_COMMIT: fada664df7a294d1d1a9ca3e7cd3637069122f17
+  HBB_COMMON_COMMIT: 229b904508364c8997aad0fb5af57effac859f60
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+  LLVM_VERSION: "15.0.6"
+  TARGET: i686-pc-windows-msvc
+  VCPKG_TRIPLET: x86-windows-static
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout NESTRA engine fork
+        uses: actions/checkout@v4
+        with:
+          path: fork
+
+      - name: Fetch the pinned upstream commit (not a branch, not a tag) and verify it
+        shell: bash
+        run: |
+          git init -q upstream-src && cd upstream-src
+          git remote add origin "$RUSTDESK_REPO"
+          git fetch -q --depth 1 origin "$RUSTDESK_COMMIT"
+          git checkout -q FETCH_HEAD
+          git submodule update --init --recursive --depth 1
+          test "$(git rev-parse HEAD)" = "$RUSTDESK_COMMIT"
+          test "$(git -C libs/hbb_common rev-parse HEAD)" = "$HBB_COMMON_COMMIT"
+          echo "upstream $RUSTDESK_TAG = $(git rev-parse HEAD), hbb_common = $(git -C libs/hbb_common rev-parse HEAD)"
+
+      - name: Apply NESTRA patches (anchored, counted; any upstream mismatch fails the build)
+        shell: bash
+        run: |
+          python3 fork/nestra/tests/test_apply_patches.py
+          cmp fork/LICENCE upstream-src/LICENCE   # repo LICENCE = upstream LICENCE byte-for-byte
+          python3 fork/nestra/apply_patches.py upstream-src
+          cd upstream-src
+          git add -A -N .
+          git diff > ../nestra-changes.diff
+          (cd libs/hbb_common && git diff) >> ../nestra-changes.diff
+          git status --short
+
+      - name: Static checks of the patched source
+        shell: bash
+        run: |
+          set -e
+          cd upstream-src
+          grep -q 'pub const RS_PUB_KEY: &str = "AZgwj6064Sndiv07Av1O8rn5E0GyNJz7BPQzS7TsnXo=";' libs/hbb_common/src/config.rs
+          grep -q 'NESTRA_RENDEZVOUS_SERVER: &str = "remote.nestraparent.com"' libs/hbb_common/src/config.rs
+          ! grep -q 'rs-ny.rustdesk.com' libs/hbb_common/src/config.rs
+          grep -q '"verification-method", "use-temporary-password"' src/nestra_config.rs
+          # the NESTRA changes never set or enable a permanent password
+          ! grep -n 'set_permanent_password\|permanent-password' ../nestra-changes.diff | grep '^[0-9]*:+'
+          echo "STATIC CHECKS: GREEN"
+
+      - name: Install LLVM and Clang (32-bit, as upstream)
+        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain (as upstream)
+        shell: bash
+        run: |
+          rustup toolchain install nightly-2023-10-13-$TARGET --target $TARGET --component rustfmt \
+            --profile minimal --no-self-update --force-non-host
+          rustup default nightly-2023-10-13-$TARGET --force-non-host
+
+      - name: Setup vcpkg (pinned commit, as upstream)
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies (manifest of the pinned upstream)
+        shell: bash
+        working-directory: upstream-src
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x86-windows-static
+        run: |
+          if ! $VCPKG_ROOT/vcpkg install --triplet $VCPKG_TRIPLET --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | head -20 | while read -r f; do echo "== $f"; tail -50 "$f"; done
+            exit 1
+          fi
+
+      - name: "Build (as upstream: inline Sciter UI, --locked)"
+        shell: bash
+        working-directory: upstream-src
+        run: |
+          python3 res/inline-sciter.py
+          sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
+          cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
+          cargo build --locked --features inline,vram,hwcodec --release --bins
+
+      - name: Package
+        shell: bash
+        run: |
+          set -e
+          mkdir -p out/engine
+          cp upstream-src/target/release/rustdesk.exe out/engine/nestra-remote-engine.exe
+          curl -fsSL -o out/engine/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
+          cp upstream-src/LICENCE out/engine/LICENCE
+          cp -r fork/LICENSES fork/NOTICE fork/SOURCE.md fork/CHANGES-FROM-UPSTREAM.md fork/UPSTREAM.lock out/engine/
+          cp nestra-changes.diff out/engine/
+          {
+            echo "upstream=$RUSTDESK_REPO tag=$RUSTDESK_TAG commit=$RUSTDESK_COMMIT hbb_common=$HBB_COMMON_COMMIT"
+            echo "nestra_fork_commit=$GITHUB_SHA repository=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY run=$GITHUB_RUN_ID"
+            echo "target=$TARGET features=inline,vram,hwcodec"
+          } > out/engine/BUILD-INFO.txt
+          (cd out && 7z a -tzip ../nestra-remote-engine-windows-x86.zip engine >/dev/null)
+          sha256sum nestra-remote-engine-windows-x86.zip | tee nestra-remote-engine-windows-x86.zip.sha256
+          (cd out/engine && sha256sum nestra-remote-engine.exe sciter.dll) | tee files.sha256
+
+      - name: Binary checks (documented CLI; no session, no network needed)
+        shell: bash
+        run: |
+          set -e
+          EXE=out/engine/nestra-remote-engine.exe
+          # fixed NESTRA host + key compiled in; upstream public server + key gone
+          grep -a -q "remote.nestraparent.com" "$EXE"
+          grep -a -q "AZgwj6064Sndiv07Av1O8rn5E0GyNJz7BPQzS7TsnXo=" "$EXE"
+          ! grep -a -q "rs-ny.rustdesk.com" "$EXE"
+          ! grep -a -q "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=" "$EXE"
+          # --nestra-session refuses a foreign server / malformed grant (the grant never travels on argv)
+          echo '{"v":1,"sessionId":"x","grant":"x","expiresUtc":"x","server":"evil.example","key":"x"}' \
+            | timeout 60 "$EXE" --nestra-session | tee probe.txt
+          grep -q "NESTRA-SESSION ended engine_failed" probe.txt
+          echo "BINARY CHECKS: GREEN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nestra-remote-engine-windows-x86
+          path: |
+            nestra-remote-engine-windows-x86.zip
+            nestra-remote-engine-windows-x86.zip.sha256
+            files.sha256
+            nestra-changes.diff

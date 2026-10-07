@@ -1,0 +1,8 @@
+upstream-src/
+out/
+*.zip
+__pycache__/
+android/**/build/
+android/.gradle/
+android/local.properties
+android/app/src/main/jniLibs/
