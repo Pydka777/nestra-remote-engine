@@ -15,6 +15,9 @@ on:
       - '.github/workflows/android-viewer.yml'
 permissions:
   contents: read
+concurrency:
+  group: android-viewer-main
+  cancel-in-progress: true
 env:
   RUSTDESK_REPO: https://github.com/rustdesk/rustdesk
   RUSTDESK_TAG: "1.5.0"
