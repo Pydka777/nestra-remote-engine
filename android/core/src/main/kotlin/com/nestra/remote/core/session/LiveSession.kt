@@ -54,6 +54,8 @@ class LiveSessionController(
     private val keepaliveMs: Long = 15_000,
     private val connectTimeoutMs: Long = 120_000,
     private val clock: () -> Long = { System.currentTimeMillis() },
+    /** v0.2.1 diagnostics sink (the app writes it to logcat, tag NESTRA-VIEWER). Lines pass [Redact.line]. */
+    private val diag: (String) -> Unit = {},
 ) {
     enum class Refusal { REMOTE_ACCESS_DISABLED, DEVICE_OFFLINE, ENGINE_NOT_READY, SESSION_IN_PROGRESS, NOT_FOUND, RATE_LIMITED,
         SIGNED_OUT, NETWORK, LAPTOP_REFUSED, EXPIRED, UNEXPECTED }
@@ -79,19 +81,22 @@ class LiveSessionController(
     private val events = LinkedBlockingQueue<Ev>()
     var listener: ((State) -> Unit)? = null
 
-    private fun set(s: State) { state = s; listener?.invoke(s) }
+    private fun log(msg: String) { try { diag(Redact.line(msg)) } catch (_: RuntimeException) { } }
+    private fun set(s: State) { if (s != state) log("state ${state} -> ${s}"); state = s; listener?.invoke(s) }
 
-    /** Phone "Disconnect" (any thread). */
-    fun disconnect() { events.offer(Ev.Disconnect) }
+    /** Phone "Disconnect" (any thread). [source] is only for the diagnostics (button, back, sign-out, ...). */
+    fun disconnect(source: String = "app") { log("disconnect requested by $source"); events.offer(Ev.Disconnect) }
 
     /** Runs the whole session on the calling (background) thread; returns the final state. */
     fun run(deviceId: String): State {
         set(State.Requesting)
+        log("session request for device ${Redact.id(deviceId)}")
         val sid = when (val r = api.startSession(deviceId)) {
             is ApiResult.Ok -> r.value.sessionId
-            else -> return refused(r)
+            else -> { log("session request refused: ${r::class.simpleName}"); return refused(r) }
         }
         sessionId = sid
+        log("session created: ${Redact.id(sid)}")
         set(State.WaitingForPc)
 
         // 1) wait for the laptop to accept and the one-time connect data
@@ -106,6 +111,7 @@ class LiveSessionController(
                         s.connect != null -> {
                             val c = s.connect
                             target = ViewerTarget(c.engineId, c.rendezvousHost, c.serverKey, c.takeGrant())
+                            log("connect data received once: engine ${Redact.engine(c.engineId)}, host ${c.rendezvousHost}, grant in memory (not logged)")
                         }
                         s.state == "refused" -> { sessionId = null; return final(State.Refused(Refusal.LAPTOP_REFUSED, s.endReason)) }
                         s.state == "expired" -> { sessionId = null; return final(State.Refused(Refusal.EXPIRED, s.endReason)) }
@@ -127,15 +133,18 @@ class LiveSessionController(
         // 2) the viewer connects with the grant (the controller's copy is wiped right after)
         set(State.Connecting)
         try {
+            log("viewer.connect (native session_add + io_loop)")
             viewer.connect(target, object : RemoteViewer.Events {
-                override fun onConnected() { events.offer(Ev.Connected) }
-                override fun onClosed(reason: String) { events.offer(Ev.Closed(reason)) }
+                override fun onConnected() { log("viewer event: onConnected (first frame)"); events.offer(Ev.Connected) }
+                override fun onClosed(reason: String) { log("viewer event: onClosed($reason)"); events.offer(Ev.Closed(reason)) }
             })
         } catch (e: RuntimeException) {
             target.wipe()
+            log("viewer.connect failed: ${e.message}")
             return end(sid, "viewer_failed", tellViewer = false, result = State.Ended("viewer_failed"))
         }
         target.wipe()
+        log("viewer.connect returned; our grant copy wiped")
 
         // 3) connecting / active: viewer events + status polls (keepalive) until something ends it
         var active = false
@@ -150,7 +159,10 @@ class LiveSessionController(
                     nextPoll = clock() + if (active) keepaliveMs else pollMs
                     when (val st = api.sessionStatus(sid)) {
                         is ApiResult.Ok -> when (st.value.state) {
-                            "ended", "expired", "refused" -> { viewer.disconnect(); sessionId = null; return final(State.Ended(st.value.endReason ?: st.value.state)) }
+                            "ended", "expired", "refused" -> {
+                                log("server says ${st.value.state} (${st.value.endReason}) -> closing the viewer")
+                                viewer.disconnect(); sessionId = null; return final(State.Ended(st.value.endReason ?: st.value.state))
+                            }
                             else -> st.value.connect?.wipe()
                         }
                         ApiResult.Unauthorized, ApiResult.NotFound -> return end(sid, "account_signed_out", tellViewer = true)
@@ -175,13 +187,27 @@ class LiveSessionController(
     }))
 
     private fun end(sid: String, reason: String, tellViewer: Boolean, result: State = State.Ended(reason)): State {
+        log("ending session ${Redact.id(sid)}: reason=$reason closeViewer=$tellViewer -> POST /v1/account/sessions/{id}/end (server records viewer_disconnect)")
         if (tellViewer) viewer.disconnect()
-        api.endSession(sid)                                         // idempotent; best effort (the server also times out)
+        val r = api.endSession(sid)                                 // idempotent; best effort (the server also times out)
+        log("session end call: ${r::class.simpleName}")
         sessionId = null
         return final(result)
     }
 
     private fun final(s: State): State { events.clear(); set(s); return s }
+}
+
+/**
+ * Redaction for diagnostics: IDs shortened, every long token-like run (grant, tokens, keys) replaced. The grant and
+ * account tokens are never passed to the log in the first place; this is the second line of defence.
+ */
+object Redact {
+    fun id(s: String?): String = if (s.isNullOrEmpty()) "-" else s.take(4) + "…"
+    fun engine(s: String?): String = if (s.isNullOrEmpty()) "-" else "…" + s.takeLast(3)
+    private val longToken = Regex("[A-Za-z0-9+/=_-]{24,}")
+    private val longDigits = Regex("\\d{8,}")
+    fun line(s: String): String = longDigits.replace(longToken.replace(s, "<redacted>")) { "…" + it.value.takeLast(3) }.take(400)
 }
 
 /** What the phone shows for a refusal (the PC-side switch is never touched from the phone). */

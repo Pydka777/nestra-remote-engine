@@ -10,6 +10,7 @@ import com.nestra.remote.core.pairing.PairingInput
 import com.nestra.remote.ui.AppRoot
 import com.nestra.remote.ui.AppViewModel
 import com.nestra.remote.ui.NestraRemoteTheme
+import com.nestra.remote.viewer.ViewerLog
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -21,6 +22,13 @@ class MainActivity : ComponentActivity() {
         handle(intent)
         setContent { NestraRemoteTheme { AppRoot(vm) } }
     }
+
+    // v0.2.1 diagnostics: lifecycle changes never end a session (only DISCONNECT / Back / the server do); logged to
+    // show that in logcat next to the session lines
+    override fun onResume() { super.onResume(); ViewerLog.i("activity onResume") }
+    override fun onPause() { ViewerLog.i("activity onPause"); super.onPause() }
+    override fun onStop() { ViewerLog.i("activity onStop"); super.onStop() }
+    override fun onDestroy() { ViewerLog.i("activity onDestroy finishing=$isFinishing configChange=$isChangingConfigurations"); super.onDestroy() }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

@@ -44,22 +44,31 @@ class RustDeskViewer(private val appDir: String, private val onSize: (Int, Int) 
     override fun connect(target: ViewerTarget, events: RemoteViewer.Events) {
         check(NativeViewer.available) { "native viewer missing" }
         NativeViewer.nativeInit(appDir)
+        ViewerLog.i("nativeConnect: $target (grant not logged), surface ${if (surface != null) "ready" else "not yet"}")
         val h = NativeViewer.nativeConnect(target.engineId, target.rendezvousHost, target.serverKey, target.grant(), object : NativeViewer.Callback {
-            override fun onConnected(width: Int, height: Int) { onSize(width, height); events.onConnected() }
-            override fun onResolution(width: Int, height: Int) = onSize(width, height)
-            override fun onClosed(reason: String) = events.onClosed(reason)
+            override fun onConnected(width: Int, height: Int) { ViewerLog.i("callback onConnected ${width}x$height"); onSize(width, height); events.onConnected() }
+            override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSize(width, height) }
+            override fun onClosed(reason: String) { ViewerLog.w("callback onClosed($reason) from the native core"); events.onClosed(reason) }
         })
+        ViewerLog.i(if (h != 0L) "nativeConnect ok (generation ${h and 0xFFFFL})" else "nativeConnect REFUSED (see the native line before)")
         check(h != 0L) { "native viewer refused the target" }
         handle.set(h)
         surface?.let { NativeViewer.nativeSetSurface(h, it) }
     }
 
+    /** Ends the native session. Only ever called by the LiveSessionController (DISCONNECT / Back / server end). */
     override fun disconnect() {
         val h = handle.getAndSet(0)
+        ViewerLog.w("viewer.disconnect -> nativeClose (handle ${if (h != 0L) "open" else "already closed"}) called from ${ViewerLog.caller()}")
         if (h != 0L) NativeViewer.nativeClose(h)
     }
 
-    fun setSurface(s: Surface?) { surface = s; handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSetSurface(it, s) } }
+    /** A Surface going away (SurfaceView recreated, app in background, rotation) only pauses drawing: never a disconnect. */
+    fun setSurface(s: Surface?) {
+        surface = s
+        ViewerLog.i("setSurface(${if (s != null) "attached" else "detached"}) session ${if (handle.get() != 0L) "open" else "not connected yet"}")
+        handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSetSurface(it, s) }
+    }
     fun mouse(kind: Int, x: Int, y: Int, button: Int = NativeViewer.LEFT, delta: Int = 0) {
         handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeMouse(it, kind, x, y, button, delta) }
     }

@@ -18,7 +18,8 @@ Changes (all listed in CHANGES-FROM-UPSTREAM.md, AGPL section 5a):
   src/ipc.rs                engine-local IPC keys: get "nestra-authed"; set "nestra-grant", "nestra-close"
   src/server.rs             NESTRA_CLOSE flag + nestra_authed_count()
   src/server/connection.rs  an authorised connection closes on its next 1 s tick when NESTRA_CLOSE is set
-  src/flutter.rs            Android viewer hooks: frames -> Surface (nestra_viewer::on_frame), events -> on_event
+  src/flutter.rs            Android viewer hooks: frames -> Surface (nestra_viewer::on_frame), events -> on_event,
+                            both with the handler's owner token (FlutterHandler::nestra_token, appended)
 """
 import pathlib, shutil, sys
 
@@ -38,6 +39,15 @@ def edit(rel, anchor, new, count=1):
         sys.exit(f"ANCHOR MISMATCH in {rel}: expected {count}, found {hits}\n--- anchor ---\n{anchor}\n--- lines containing {first!r} ---\n{ctx}")
     p.write_text(s.replace(anchor, new), encoding="utf-8")
     print(f"patched {rel}")
+
+
+def append(rel, addition):
+    p = ROOT / rel
+    s = p.read_text(encoding="utf-8")
+    if not s.endswith("\n"):
+        s += "\n"
+    p.write_text(s + addition, encoding="utf-8")
+    print(f"patched {rel} (appended)")
 
 
 def after(rel, anchor, addition):
@@ -127,12 +137,24 @@ after("src/server/connection.rs", "                _ = second_timer.tick() => {\
       "                    }\n")
 
 # ---------------------------------------------------------------------------------------------- Android viewer hooks
+# both hooks carry the handler's owner token, so events / frames of an older (closing) session never reach a newer one
 after("src/flutter.rs", "    fn on_rgba_soft_render(&self, display: usize, rgba: &mut scrap::ImageRgb) {\n",
       "        #[cfg(target_os = \"android\")]\n"
-      "        if crate::nestra_viewer::on_frame(display, rgba) {\n"
+      "        if crate::nestra_viewer::on_frame(self.nestra_token(), display, rgba) {\n"
       "            return;\n"
       "        }\n")
 after("src/flutter.rs",
       '        h.insert("name", json!(name));\n        let out = serde_json::ser::to_string(&h).unwrap_or("".to_owned());\n',
-      '        #[cfg(target_os = "android")]\n        crate::nestra_viewer::on_event(&out);\n')
+      '        #[cfg(target_os = "android")]\n        crate::nestra_viewer::on_event(self.nestra_token(), &out);\n')
+edit("src/flutter.rs", "pub struct FlutterHandler {\n    // ui session id -> display handler data\n    session_handlers: Arc<RwLock<HashMap<SessionID, SessionHandler>>>,\n",
+     "pub struct FlutterHandler {\n    // ui session id -> display handler data\n    session_handlers: Arc<RwLock<HashMap<SessionID, SessionHandler>>>,\n")   # anchor check only (field the token is taken from)
+append("src/flutter.rs",
+       "\n/// NESTRA Remote: owner token of a session's FlutterHandler (the Arc is shared by all clones of that handler), so the\n"
+       "/// Android viewer can tell its own session's frames/events from those of an older, closing session.\n"
+       "#[cfg(target_os = \"android\")]\n"
+       "impl FlutterHandler {\n"
+       "    pub fn nestra_token(&self) -> usize {\n"
+       "        Arc::as_ptr(&self.session_handlers) as *const () as usize\n"
+       "    }\n"
+       "}\n")
 print("NESTRA patches applied")

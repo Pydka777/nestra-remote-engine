@@ -59,7 +59,7 @@ import com.nestra.remote.ui.UiState
 @Composable
 fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     val st = s.session
-    BackHandler { vm.disconnectSession() }
+    BackHandler { vm.disconnectSession("back") }
     var view by remember { mutableStateOf(IntSize.Zero) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -69,7 +69,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
             Text(if (st is State.Active) "REMOTE SESSION ACTIVE · $pcName" else "Connecting to $pcName…",
                 color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
             if (st is State.Active) OutlinedButton(onClick = { keyboard = !keyboard }) { Text("Keyboard", color = Color.White) }
-            Button(onClick = { vm.disconnectSession() }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+            Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                 modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
         }
         Box(Modifier.fillMaxSize().onSizeChanged { view = it }) {
@@ -77,9 +77,10 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
             AndroidView(
                 factory = { ctx -> SurfaceView(ctx).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(h: SurfaceHolder) { vm.viewer?.setSurface(h.surface) }
-                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) { vm.viewer?.setSurface(h.surface) }
-                        override fun surfaceDestroyed(h: SurfaceHolder) { vm.viewer?.setSurface(null) }
+                        // Surface lifecycle only attaches / detaches the drawing target: it never ends the session
+                        override fun surfaceCreated(h: SurfaceHolder) { ViewerLog.i("surfaceCreated"); vm.viewer?.setSurface(h.surface) }
+                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) { ViewerLog.i("surfaceChanged ${w}x$hh"); vm.viewer?.setSurface(h.surface) }
+                        override fun surfaceDestroyed(h: SurfaceHolder) { ViewerLog.i("surfaceDestroyed (session stays open)"); vm.viewer?.setSurface(null) }
                     })
                 } },
                 modifier = Modifier.fillMaxSize()

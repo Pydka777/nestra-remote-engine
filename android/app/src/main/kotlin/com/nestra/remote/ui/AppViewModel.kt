@@ -13,6 +13,7 @@ import com.nestra.remote.core.session.LiveSessionText
 import com.nestra.remote.core.session.RemoteSession
 import com.nestra.remote.viewer.NativeViewer
 import com.nestra.remote.viewer.RustDeskViewer
+import com.nestra.remote.viewer.ViewerLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -86,7 +87,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelMfa() { session.cancelMfa(); go(Screen.SignIn) }
 
     fun logout() = work {
-        controller?.disconnect()
+        controller?.disconnect("sign-out")
         io { session.logout() }
         _state.value = UiState(screen = Screen.SignIn, message = "Signed out. This phone holds no NESTRA credentials now.")
     }
@@ -150,12 +151,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val v = RustDeskViewer(getApplication<Application>().filesDir.absolutePath) { w, h -> _state.update { it.copy(remoteWidth = w, remoteHeight = h) } }
-        val c = LiveSessionController(session, v)
+        val c = LiveSessionController(session, v, diag = ViewerLog::i)
+        ViewerLog.i("Connect tapped (app ${com.nestra.remote.BuildConfig.VERSION_NAME}); native viewer ABI ${NativeViewer.ABI}")
         viewer = v; controller = c
         c.listener = { st -> _state.update { it.copy(session = st) } }
         _state.update { it.copy(screen = Screen.Session(deviceId), session = LiveSessionController.State.Requesting, message = null, remoteWidth = 0, remoteHeight = 0) }
         viewModelScope.launch(Dispatchers.IO) {
             val end = c.run(deviceId)
+            ViewerLog.i("session finished: $end")
             withContext(Dispatchers.Main) {
                 controller = null; viewer = null
                 _state.update { it.copy(session = null, screen = Screen.DeviceDetails(deviceId)) }
@@ -169,8 +172,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Disconnect on the phone (also the back button on the session screen). */
-    fun disconnectSession() { controller?.disconnect() }
+    /** Disconnect on the phone: the DISCONNECT button or Back on the session screen ([source] is logged). */
+    fun disconnectSession(source: String) {
+        ViewerLog.w("disconnectSession($source) from ${ViewerLog.caller()}")
+        controller?.disconnect(source)
+    }
 
     private fun endText(reason: String) = when (reason) {
         "viewer_disconnect" -> "Session ended."
@@ -179,11 +185,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         "device_unpaired", "device_revoked" -> "This PC is no longer available to your account."
         "account_signed_out" -> "You were signed out. The session ended."
         "engine_exited", "engine_failed", "viewer_failed", "engine_closed" -> "The remote desktop connection closed."
+        "connection_error" -> "Could not connect to the PC screen (connection error). Try again."
+        "login_failed" -> "The PC did not accept the one-time session key. Try again."
+        "insecure_connection" -> "The connection to the PC could not be end-to-end encrypted, so it was not opened."
         "expired" -> "The PC did not answer in time."
         else -> "Session ended."
     }
 
-    override fun onCleared() { controller?.disconnect() }
+    /** Only when the Activity really finishes (not on rotation / configuration change: the ViewModel survives those). */
+    override fun onCleared() { if (controller != null) ViewerLog.w("ViewModel cleared (app closed) -> disconnect"); controller?.disconnect("app-closed") }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 

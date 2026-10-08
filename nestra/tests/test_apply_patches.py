@@ -43,6 +43,11 @@ FILES = {
     "src/server/connection.rs":
         '                _ = second_timer.tick() => {\n                    #[cfg(windows)]\n                    conn.portable_check();\n',
     "src/flutter.rs":
+        'pub struct FlutterHandler {\n'
+        '    // ui session id -> display handler data\n'
+        '    session_handlers: Arc<RwLock<HashMap<SessionID, SessionHandler>>>,\n'
+        '    display_rgbas: Arc<RwLock<HashMap<usize, RgbaData>>>,\n'
+        '}\n'
         '    fn on_rgba_soft_render(&self, display: usize, rgba: &mut scrap::ImageRgb) {\n'
         '        let mut rgba_write_lock = self.display_rgbas.write().unwrap();\n'
         '        h.insert("name", json!(name));\n'
@@ -89,7 +94,11 @@ check("ipc keys", 'name == "nestra-authed"' in ipc and 'name == "nestra-grant"' 
 check("server close flag + count", "pub static NESTRA_CLOSE" in R("src/server.rs") and "fn nestra_authed_count" in R("src/server.rs"))
 check("connection closes on tick", "NESTRA_CLOSE.load" in R("src/server/connection.rs"))
 fl = R("src/flutter.rs")
-check("android hooks", "nestra_viewer::on_frame(display, rgba)" in fl and "nestra_viewer::on_event(&out)" in fl)
+check("android hooks carry the handler token", "nestra_viewer::on_frame(self.nestra_token(), display, rgba)" in fl
+      and "nestra_viewer::on_event(self.nestra_token(), &out)" in fl)
+check("FlutterHandler::nestra_token appended (android only, from the shared session_handlers Arc)",
+      fl.rstrip().endswith("}") and "impl FlutterHandler {\n    pub fn nestra_token(&self) -> usize {\n        Arc::as_ptr(&self.session_handlers)" in fl
+      and fl.count("#[cfg(target_os = \"android\")]\nimpl FlutterHandler") == 1)
 check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs")))
 r2 = run(d)
 check("second run refused (no double patch)", r2.returncode != 0 and "ALREADY PATCHED" in (r2.stdout + r2.stderr))

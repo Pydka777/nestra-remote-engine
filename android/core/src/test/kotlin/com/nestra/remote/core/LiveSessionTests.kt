@@ -9,6 +9,7 @@ import com.nestra.remote.core.session.LiveSessionController
 import com.nestra.remote.core.session.LiveSessionController.Refusal
 import com.nestra.remote.core.session.LiveSessionController.State
 import com.nestra.remote.core.session.LiveSessionText
+import com.nestra.remote.core.session.Redact
 import com.nestra.remote.core.session.RemoteSession
 import com.nestra.remote.core.session.RemoteViewer
 import com.nestra.remote.core.session.ViewerTarget
@@ -210,5 +211,30 @@ class LiveSessionTests {
         assertEquals(ApiResult.NotFound, s.startSession("not-a-device"))
         assertEquals(ApiResult.Ok(Unit), s.endSession(sid))
         assertEquals(ApiResult.Ok(Unit), s.endSession(sid))                              // idempotent
+    }
+
+    @Test fun diagnosticsTraceTheWholePathWithoutGrantTokenOrFullIds() {
+        val (b, s) = world()
+        val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val v = FakeViewer()
+        val c = LiveSessionController(s, v, pollMs = 10, keepaliveMs = 30, connectTimeoutMs = 5000, diag = { lines += it })
+        val run = Run(c)
+        until("requested") { b.onlySession() != null }
+        val sid = b.onlySession()!!
+        b.pc(sid, "accepted"); until("connect") { v.target != null }
+        val grant = b.grantOf(sid)
+        v.events!!.onClosed("connection_error")                         // native: establishment error before any frame
+        assertEquals(State.Ended("connection_error"), run.join())
+        val all = lines.joinToString("\n")
+        for (step in listOf("session request", "session created", "connect data received once", "viewer.connect",
+                "our grant copy wiped", "viewer event: onClosed(connection_error)", "reason=connection_error", "session end call"))
+            assertTrue("missing diagnostics step '$step' in:\n$all", all.contains(step))
+        assertFalse("grant in diagnostics", all.contains(grant))
+        assertFalse("full session id in diagnostics", all.contains(sid))
+        assertFalse("full device id in diagnostics", all.contains(PC))
+        assertFalse("account token in diagnostics", Regex("[A-Za-z0-9_-]{30,}").containsMatchIn(all))
+        // redaction is a second line of defence for anything token-like
+        assertEquals("x <redacted> y …789", Redact.line("x ${"a".repeat(43)} y 123456789"))
+        assertEquals("gt0v…", Redact.id(PC)); assertEquals("…796", Redact.engine("487102796"))
     }
 }
