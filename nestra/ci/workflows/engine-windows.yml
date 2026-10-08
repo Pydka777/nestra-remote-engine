@@ -67,7 +67,7 @@ jobs:
           grep -q '"enable-audio", "Y"' src/nestra_config.rs
           grep -q '"enable-file-transfer", "Y"' src/nestra_config.rs
           grep -q '"enable-clipboard", "Y"' src/nestra_config.rs
-          for opt in enable-tunnel enable-terminal enable-remote-camera enable-remote-printer enable-remote-restart enable-remote-configuration-modification direct-server enable-lan-discovery-discoverability; do
+          for opt in enable-tunnel enable-terminal enable-camera enable-remote-printer enable-remote-restart enable-record-session allow-remote-config-modification direct-server enable-lan-discovery; do
             grep -q "\"$opt\", \"N\"" src/nestra_config.rs || { echo "unsafe option not forced OFF: $opt"; exit 1; }
           done
           # the NESTRA changes never set or enable a permanent password
