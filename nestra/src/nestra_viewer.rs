@@ -340,6 +340,14 @@ pub fn on_event(token: usize, json: &str) {
             if let Some(v) = VIEWER.lock().unwrap().as_mut().filter(|v| v.gen == gen) {
                 v.logged_in = true;
             }
+            let displays = field(&e, "displays");
+            if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(displays) {
+                let count = list.len().max(1) as jint;
+                if let Some((vm, cb)) = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone())) {
+                    callback(vm, &cb, "onDisplays", "(I)V", &[JValue::Int(count)]);
+                }
+                info(&format!("initial display list: {count} display(s)"));
+            }
             session.switch_display(0);
             session.refresh_video(0);
         }
