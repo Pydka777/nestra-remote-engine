@@ -8,6 +8,7 @@
 //!   void nativeMouse(long h, int kind, int x, int y, int button, int delta)   // kind: 0 move 1 down 2 up 3 wheel
 //!   void nativeSwitchDisplay(long h, int display)
 //!   void nativeSendClipboard(long h, String text)
+//!   void nativeToggleAudio(long h)
 //!   void nativeReadRemoteDir(long h, String path)
 //!   int  nativeTransferFile(long h, String from, String to, boolean remoteToLocal)
 //!   void nativeKey(long h, int androidKeyCode, boolean down)
@@ -609,6 +610,12 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSendClip
     msg.set_clipboard(Clipboard { content: t.as_bytes().to_vec().into(), ..Default::default() });
     crate::flutter::send_clipboard_msg(msg, false);
     info(&format!("clipboard sent: {} UTF-8 bytes", t.len()));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeToggleAudio(_e: JNIEnv, _c: JClass, h: jlong) {
+    with_session(h, |s| s.toggle_option("disable-audio".to_owned()));
+    info("audio option toggled");
 }
 
 #[no_mangle]

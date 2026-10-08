@@ -79,6 +79,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var keyboard by remember { mutableStateOf(false) }
+    var audioOn by remember { mutableStateOf(true) }
     var dragMode by remember { mutableStateOf(false) }
     var touchpadMode by remember { mutableStateOf(true) }
     var sessionBarVisible by remember { mutableStateOf(true) }
@@ -100,6 +101,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                     OutlinedButton(onClick = { touchpadMode = !touchpadMode }) { Text(if (touchpadMode) "Touchpad" else "Direct", color = Color.White) }
                     OutlinedButton(onClick = { dragMode = !dragMode }, modifier = Modifier.padding(start = 6.dp)) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
                     OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+                    OutlinedButton(onClick = { vm.viewer?.toggleAudio(); audioOn = !audioOn }, modifier = Modifier.padding(start = 6.dp)) { Text(if (audioOn) "Audio ON" else "Audio OFF", color = Color.White) }
                     if (s.displayCount > 1) {
                         OutlinedButton(onClick = {
                             currentDisplay = (currentDisplay + 1) % s.displayCount

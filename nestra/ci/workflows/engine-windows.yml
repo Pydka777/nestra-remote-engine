@@ -63,6 +63,13 @@ jobs:
           grep -q 'NESTRA_RENDEZVOUS_SERVER: &str = "remote.nestraparent.com"' libs/hbb_common/src/config.rs
           ! grep -q 'rs-ny.rustdesk.com' libs/hbb_common/src/config.rs
           grep -q '"verification-method", "use-temporary-password"' src/nestra_config.rs
+          # ETAP 10 allows only owner-session collaboration features; privileged side channels stay disabled.
+          grep -q '"enable-audio", "Y"' src/nestra_config.rs
+          grep -q '"enable-file-transfer", "Y"' src/nestra_config.rs
+          grep -q '"enable-clipboard", "Y"' src/nestra_config.rs
+          for opt in enable-tunnel enable-terminal enable-remote-camera enable-remote-printer enable-remote-restart enable-remote-configuration-modification direct-server enable-lan-discovery-discoverability; do
+            grep -q "\"$opt\", \"N\"" src/nestra_config.rs || { echo "unsafe option not forced OFF: $opt"; exit 1; }
+          done
           # the NESTRA changes never set or enable a permanent password
           ! grep -n 'set_permanent_password\|permanent-password' ../nestra-changes.diff | grep '^[0-9]*:+'
           echo "STATIC CHECKS: GREEN"

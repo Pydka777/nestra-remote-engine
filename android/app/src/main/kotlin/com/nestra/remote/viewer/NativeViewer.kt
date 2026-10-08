@@ -36,6 +36,7 @@ object NativeViewer {
     @JvmStatic external fun nativeText(handle: Long, text: String)
     @JvmStatic external fun nativeSwitchDisplay(handle: Long, display: Int)
     @JvmStatic external fun nativeSendClipboard(handle: Long, text: String)
+    @JvmStatic external fun nativeToggleAudio(handle: Long)
     @JvmStatic external fun nativeReadRemoteDir(handle: Long, path: String)
     @JvmStatic external fun nativeTransferFile(handle: Long, from: String, to: String, remoteToLocal: Boolean): Int
     @JvmStatic external fun nativeClose(handle: Long)
@@ -94,6 +95,7 @@ class RustDeskViewer(
     fun text(t: String) { if (t.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeText(it, t) } }
     fun switchDisplay(display: Int) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSwitchDisplay(it, display) } }
     fun sendClipboard(text: String) { if (text.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSendClipboard(it, text) } }
+    fun toggleAudio() { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeToggleAudio(it) } }
     fun readRemoteDir(path: String) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeReadRemoteDir(it, path) } }
     fun transferFile(from: String, to: String, remoteToLocal: Boolean): Int = handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeTransferFile(it, from, to, remoteToLocal) } ?: -1
 }
