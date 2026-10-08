@@ -83,6 +83,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var dragMode by remember { mutableStateOf(false) }
     var touchpadMode by remember { mutableStateOf(true) }
     var sessionBarVisible by remember { mutableStateOf(true) }
+    var toolsVisible by remember { mutableStateOf(false) }
     var filesVisible by remember { mutableStateOf(false) }
     var currentDisplay by remember { mutableStateOf(0) }
     val context = LocalContext.current
@@ -101,24 +102,8 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                     OutlinedButton(onClick = { touchpadMode = !touchpadMode }) { Text(if (touchpadMode) "Touchpad" else "Direct", color = Color.White) }
                     OutlinedButton(onClick = { dragMode = !dragMode }, modifier = Modifier.padding(start = 6.dp)) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
                     OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
-                    OutlinedButton(onClick = { vm.viewer?.toggleAudio(); audioOn = !audioOn }, modifier = Modifier.padding(start = 6.dp)) { Text(if (audioOn) "Audio ON" else "Audio OFF", color = Color.White) }
-                    if (s.displayCount > 1) {
-                        OutlinedButton(onClick = {
-                            currentDisplay = (currentDisplay + 1) % s.displayCount
-                            vm.viewer?.switchDisplay(currentDisplay)
-                            scale = 1f; offset = Offset.Zero
-                        }, modifier = Modifier.padding(start = 6.dp)) { Text("Screen ${currentDisplay + 1}/${s.displayCount}", color = Color.White) }
-                    }
-                    OutlinedButton(onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { vm.viewer?.sendClipboard(it) }
-                    }, modifier = Modifier.padding(start = 6.dp)) { Text("Clipboard", color = Color.White) }
-                    OutlinedButton(onClick = {
-                        filesVisible = !filesVisible
-                        if (filesVisible && s.remoteFiles.isEmpty()) vm.openRemoteFiles("")
-                    }, modifier = Modifier.padding(start = 6.dp)) { Text("Files", color = Color.White) }
-                    OutlinedButton(onClick = { scale = 1f; offset = Offset.Zero }, modifier = Modifier.padding(start = 6.dp)) { Text("Fit", color = Color.White) }
-                    OutlinedButton(onClick = { sessionBarVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
+                    OutlinedButton(onClick = { toolsVisible = !toolsVisible }, modifier = Modifier.padding(start = 6.dp)) { Text("Tools", color = Color.White) }
+                    OutlinedButton(onClick = { sessionBarVisible = false; toolsVisible = false; filesVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
                 }
                 Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                     modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
@@ -288,6 +273,37 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         close()
                     }
                     drawPath(q, Color.White)
+                }
+            }
+            if (toolsVisible && st is State.Active) {
+                Column(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .widthIn(min = 190.dp, max = 260.dp)
+                        .background(Color(0xEE16191D))
+                        .padding(10.dp)
+                ) {
+                    Text("TOOLS", color = Color.White, fontWeight = FontWeight.Bold)
+                    OutlinedButton(onClick = { vm.viewer?.toggleAudio(); audioOn = !audioOn }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                        Text(if (audioOn) "Audio ON" else "Audio OFF", color = Color.White)
+                    }
+                    if (s.displayCount > 1) {
+                        OutlinedButton(onClick = {
+                            currentDisplay = (currentDisplay + 1) % s.displayCount
+                            vm.viewer?.switchDisplay(currentDisplay)
+                            scale = 1f; offset = Offset.Zero
+                        }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { Text("Screen ${currentDisplay + 1}/${s.displayCount}", color = Color.White) }
+                    }
+                    OutlinedButton(onClick = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { vm.viewer?.sendClipboard(it) }
+                    }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { Text("Send clipboard", color = Color.White) }
+                    OutlinedButton(onClick = {
+                        filesVisible = true; toolsVisible = false
+                        if (s.remoteFiles.isEmpty()) vm.openRemoteFiles("")
+                    }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { Text("Files", color = Color.White) }
+                    OutlinedButton(onClick = { scale = 1f; offset = Offset.Zero }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { Text("Fit screen", color = Color.White) }
+                    OutlinedButton(onClick = { toolsVisible = false }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) { Text("Close", color = Color.White) }
                 }
             }
             if (filesVisible && st is State.Active) {
