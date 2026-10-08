@@ -12,8 +12,8 @@ android {
         applicationId = "com.nestra.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.3"       // NESTRA Remote Android v0.2.3 - ETAP 9 touch/mouse UX fix + secret-handoff diagnostics, NOT production-ready
+        versionCode = 6
+        versionName = "0.2.4"       // NESTRA Remote Android v0.2.4 - explicit drag mode; normal cursor movement never holds left button
         buildConfigField("String", "PARENT_BASE_URL", "\"https://panel.nestraparent.com\"")
         buildConfigField("String", "REMOTE_BASE_URL", "\"https://remote.nestraparent.com\"")
         // AGPL-3.0 (the APK contains the RustDesk core): public Corresponding Source. Set before distributing any APK.

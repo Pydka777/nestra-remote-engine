@@ -53,7 +53,7 @@ import com.nestra.remote.ui.UiState
 /**
  * ETAP 9 live session screen. The picture is the native RustDesk core drawing the PC's REAL screen into a
  * SurfaceView (never screenshots). Input: one finger moves the remote cursor without holding a button; tap = left
- * click; long press without movement = right click; long press then move = left-button drag. Two fingers = scroll
+ * click; long press without movement = right click. Dragging is explicit via the Drag toolbar mode. Two fingers = scroll
  * (or pan when zoomed), pinch = zoom on the phone, keyboard button = text + keys.
  * A red "REMOTE SESSION ACTIVE" bar with DISCONNECT is always visible; Back also disconnects.
  */
@@ -65,11 +65,15 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var keyboard by remember { mutableStateOf(false) }
+    var dragMode by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.fillMaxWidth().background(Color(0xFFB00020)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (st is State.Active) "REMOTE SESSION ACTIVE · $pcName" else "Connecting to $pcName…",
                 color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            if (st is State.Active) OutlinedButton(onClick = { keyboard = !keyboard }) { Text("Keyboard", color = Color.White) }
+            if (st is State.Active) {
+                OutlinedButton(onClick = { dragMode = !dragMode }) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
+                OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+            }
             Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                 modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
         }
@@ -119,16 +123,15 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                                     last = change.position
                                     tEnd = change.uptimeMillis
                                     val distance = (last - start).getDistance()
-                                    val heldLongEnough = tEnd - t0 >= viewConfiguration.longPressTimeoutMillis
 
-                                    // Normal one-finger movement is cursor hover only. Never hold LEFT just because
-                                    // the finger moved: doing so selected text and dragged windows accidentally.
+                                    // Normal one-finger movement is cursor hover only. It must never press LEFT.
                                     map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
 
-                                    // Drag is deliberate: hold, then move beyond touch slop.
-                                    if (!dragging && heldLongEnough && distance > viewConfiguration.touchSlop) {
+                                    // Dragging is explicit only: the toolbar Drag mode must be enabled first.
+                                    if (dragMode && !dragging && distance > viewConfiguration.touchSlop) {
                                         dragging = true
-                                        map(last).let { viewer?.mouse(NativeViewer.DOWN, it.first, it.second, NativeViewer.LEFT) }
+                                        map(start).let { viewer?.mouse(NativeViewer.DOWN, it.first, it.second, NativeViewer.LEFT) }
+                                        map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
                                     }
                                 }
                                 ev.changes.firstOrNull()?.let { tEnd = it.uptimeMillis }
