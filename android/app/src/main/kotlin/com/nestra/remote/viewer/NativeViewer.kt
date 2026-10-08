@@ -22,6 +22,7 @@ object NativeViewer {
         fun onResolution(width: Int, height: Int)
         fun onDisplays(count: Int)
         fun onClipboard(text: String)
+        fun onFileEvent(name: String, json: String)
         fun onClosed(reason: String)
     }
 
@@ -35,6 +36,8 @@ object NativeViewer {
     @JvmStatic external fun nativeText(handle: Long, text: String)
     @JvmStatic external fun nativeSwitchDisplay(handle: Long, display: Int)
     @JvmStatic external fun nativeSendClipboard(handle: Long, text: String)
+    @JvmStatic external fun nativeReadRemoteDir(handle: Long, path: String)
+    @JvmStatic external fun nativeTransferFile(handle: Long, from: String, to: String, remoteToLocal: Boolean): Int
     @JvmStatic external fun nativeClose(handle: Long)
 
     const val MOVE = 0; const val DOWN = 1; const val UP = 2; const val WHEEL = 3
@@ -47,6 +50,7 @@ class RustDeskViewer(
     private val onSize: (Int, Int) -> Unit,
     private val onDisplays: (Int) -> Unit,
     private val onClipboard: (String) -> Unit,
+    private val onFileEvent: (String, String) -> Unit,
 ) : RemoteViewer {
     private val handle = AtomicLong(0)
     @Volatile private var surface: Surface? = null
@@ -61,6 +65,7 @@ class RustDeskViewer(
             override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSize(width, height) }
             override fun onDisplays(count: Int) { ViewerLog.i("callback onDisplays count=$count"); onDisplays(count.coerceAtLeast(1)) }
             override fun onClipboard(text: String) { ViewerLog.i("callback onClipboard ${text.toByteArray().size} bytes"); onClipboard(text) }
+            override fun onFileEvent(name: String, json: String) { ViewerLog.i("callback onFileEvent $name"); onFileEvent(name, json) }
             override fun onClosed(reason: String) { ViewerLog.w("callback onClosed($reason) from the native core"); events.onClosed(reason) }
         })
         ViewerLog.i(if (h != 0L) "nativeConnect ok (generation ${h and 0xFFFFL})" else "nativeConnect REFUSED (see the native line before)")
@@ -89,4 +94,6 @@ class RustDeskViewer(
     fun text(t: String) { if (t.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeText(it, t) } }
     fun switchDisplay(display: Int) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSwitchDisplay(it, display) } }
     fun sendClipboard(text: String) { if (text.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSendClipboard(it, text) } }
+    fun readRemoteDir(path: String) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeReadRemoteDir(it, path) } }
+    fun transferFile(from: String, to: String, remoteToLocal: Boolean): Int = handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeTransferFile(it, from, to, remoteToLocal) } ?: -1
 }

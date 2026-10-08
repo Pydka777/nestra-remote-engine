@@ -4,6 +4,9 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nestra.remote.NestraRemoteApp
@@ -18,11 +21,19 @@ import com.nestra.remote.viewer.NativeViewer
 import com.nestra.remote.viewer.RustDeskViewer
 import com.nestra.remote.viewer.ViewerLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.File
+
+data class RemoteFileEntry(val name: String, val entryType: Int, val size: Long) {
+    val isDirectory: Boolean get() = entryType < 3
+    val isDrive: Boolean get() = entryType == 3
+}
 
 sealed interface Screen {
     data object Splash : Screen
@@ -50,6 +61,9 @@ data class UiState(
     val remoteWidth: Int = 0,
     val remoteHeight: Int = 0,
     val displayCount: Int = 1,
+    val remotePath: String = "",
+    val remoteFiles: List<RemoteFileEntry> = emptyList(),
+    val fileStatus: String? = null,
 )
 
 /**
@@ -91,6 +105,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelMfa() { session.cancelMfa(); go(Screen.SignIn) }
 
     fun logout() = work {
+        reconnectCancelled = true
         controller?.disconnect("sign-out")
         io { session.logout() }
         _state.value = UiState(screen = Screen.SignIn, message = "Signed out. This phone holds no NESTRA credentials now.")
@@ -146,16 +161,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------ ETAP 9 live session
     @Volatile var viewer: RustDeskViewer? = null; private set
     @Volatile private var controller: LiveSessionController? = null
+    @Volatile private var reconnectCancelled = false
+    @Volatile private var connectLoopActive = false
 
     /** Connect: only for an own, paired, online PC whose owner switched Remote Access ON at the PC. */
     fun connect(deviceId: String) {
-        if (controller != null) return
+        if (controller != null || connectLoopActive) return
         if (!NativeViewer.available) {
             say("This app build does not contain the remote desktop viewer (RustDesk core). Install the NESTRA Remote APK built with the viewer.")
             return
         }
         val app = getApplication<Application>()
-        val v = RustDeskViewer(
+        fun newViewer() = RustDeskViewer(
             app.filesDir.absolutePath,
             onSize = { w, h -> _state.update { it.copy(remoteWidth = w, remoteHeight = h) } },
             onDisplays = { count -> _state.update { it.copy(displayCount = count.coerceAtLeast(1)) } },
@@ -163,18 +180,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("NESTRA Remote", text))
             },
+            onFileEvent = ::handleFileEvent,
         )
-        val c = LiveSessionController(session, v, diag = ViewerLog::i)
+        fun transient(end: LiveSessionController.State): Boolean = when (end) {
+            is LiveSessionController.State.Ended -> end.reason in setOf("connection_error", "engine_closed", "engine_exited", "viewer_failed")
+            is LiveSessionController.State.Refused -> end.why == LiveSessionController.Refusal.NETWORK || end.why == LiveSessionController.Refusal.DEVICE_OFFLINE
+            else -> false
+        }
+
+        reconnectCancelled = false
+        connectLoopActive = true
         ViewerLog.i("Connect tapped (app ${com.nestra.remote.BuildConfig.VERSION_NAME}); native viewer ABI ${NativeViewer.ABI}")
-        viewer = v; controller = c
-        c.listener = { st -> _state.update { it.copy(session = st) } }
-        _state.update { it.copy(screen = Screen.Session(deviceId), session = LiveSessionController.State.Requesting, message = null, remoteWidth = 0, remoteHeight = 0) }
+        _state.update { it.copy(screen = Screen.Session(deviceId), session = LiveSessionController.State.Requesting, message = null, remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
         viewModelScope.launch(Dispatchers.IO) {
-            val end = c.run(deviceId)
-            ViewerLog.i("session finished: $end")
-            withContext(Dispatchers.Main) {
+            var end: LiveSessionController.State
+            var reconnectAttempt = 0
+            while (true) {
+                val v = newViewer()
+                val c = LiveSessionController(session, v, diag = ViewerLog::i)
+                viewer = v; controller = c
+                c.listener = { st -> _state.update { it.copy(session = st) } }
+                end = c.run(deviceId)
+                ViewerLog.i("session finished: $end")
                 controller = null; viewer = null
-                _state.update { it.copy(session = null, screen = Screen.DeviceDetails(deviceId)) }
+                if (!transient(end) || reconnectAttempt >= 3 || reconnectCancelled) break
+                reconnectAttempt++
+                val waitMs = reconnectAttempt * 1_500L
+                ViewerLog.w("transient session end -> reconnect $reconnectAttempt/3 in ${waitMs}ms")
+                _state.update { it.copy(session = LiveSessionController.State.Requesting, remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
+                delay(waitMs)
+            }
+            withContext(Dispatchers.Main) {
+                controller = null; viewer = null; connectLoopActive = false
+                _state.update { it.copy(session = null, screen = Screen.DeviceDetails(deviceId), remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
                 say(when (end) {
                     is LiveSessionController.State.Refused -> LiveSessionText.refusal(end.why, end.detail)
                     is LiveSessionController.State.Ended -> endText(end.reason)
@@ -185,8 +223,89 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun handleFileEvent(name: String, json: String) {
+        try {
+            val outer = JSONObject(json)
+            when (name) {
+                "file_dir" -> {
+                    val inner = JSONObject(outer.optString("value", "{}"))
+                    val entries = inner.optJSONArray("entries")
+                    val files = buildList {
+                        if (entries != null) for (i in 0 until entries.length()) {
+                            val e = entries.optJSONObject(i) ?: continue
+                            add(RemoteFileEntry(e.optString("name"), e.optInt("entry_type", 4), e.optLong("size", 0)))
+                        }
+                    }.sortedWith(compareBy<RemoteFileEntry> { !(it.isDirectory || it.isDrive) }.thenBy { it.name.lowercase() })
+                    _state.update { it.copy(remotePath = inner.optString("path", it.remotePath), remoteFiles = files, fileStatus = null) }
+                }
+                "job_progress" -> _state.update { it.copy(fileStatus = "Transferring file…") }
+                "job_done" -> _state.update { it.copy(fileStatus = "File transfer finished.") }
+                "job_error" -> _state.update { it.copy(fileStatus = "File transfer failed.") }
+            }
+        } catch (e: Exception) {
+            ViewerLog.w("file event parse failed: ${e.javaClass.simpleName}")
+        }
+    }
+
+    fun openRemoteFiles(path: String = "") {
+        _state.update { it.copy(fileStatus = "Loading files…") }
+        viewer?.readRemoteDir(path)
+    }
+
+    fun openRemoteEntry(entry: RemoteFileEntry) {
+        if (!(entry.isDirectory || entry.isDrive)) return
+        val base = _state.value.remotePath
+        val next = when {
+            entry.isDrive -> if (entry.name.endsWith("\\")) entry.name else "${entry.name}\\"
+            base.isBlank() || base == "/" -> entry.name
+            base.endsWith("\\") || base.endsWith("/") -> base + entry.name
+            else -> "$base\\${entry.name}"
+        }
+        openRemoteFiles(next)
+    }
+
+    fun remoteFilesUp() {
+        val p = _state.value.remotePath.trimEnd('\\', '/')
+        if (p.length <= 3 || p.isBlank()) { openRemoteFiles("/"); return }
+        val cut = maxOf(p.lastIndexOf('\\'), p.lastIndexOf('/'))
+        openRemoteFiles(if (cut <= 2) p.take(3) else p.substring(0, cut))
+    }
+
+    fun uploadUri(uri: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        val app = getApplication<Application>()
+        val resolver = app.contentResolver
+        var name = "upload-${System.currentTimeMillis()}"
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) name = c.getString(0)?.takeIf { it.isNotBlank() } ?: name
+        }
+        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val local = File(app.cacheDir, "nestra-upload-$safe")
+        resolver.openInputStream(uri)?.use { input -> local.outputStream().use { input.copyTo(it) } } ?: return@launch
+        val base = _state.value.remotePath
+        val remote = when {
+            base.isBlank() || base == "/" -> safe
+            base.endsWith("\\") -> base + safe
+            else -> "$base\\$safe"
+        }
+        val id = viewer?.transferFile(local.absolutePath, remote, false) ?: -1
+        _state.update { it.copy(fileStatus = if (id >= 0) "Uploading $safe…" else "Upload could not start.") }
+    }
+
+    fun downloadRemoteFile(entry: RemoteFileEntry) {
+        if (entry.isDirectory || entry.isDrive) return
+        val app = getApplication<Application>()
+        val base = _state.value.remotePath
+        val remote = if (base.endsWith("\\")) base + entry.name else "$base\\${entry.name}"
+        val dir = app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: app.filesDir
+        dir.mkdirs()
+        val local = File(dir, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        val id = viewer?.transferFile(remote, local.absolutePath, true) ?: -1
+        _state.update { it.copy(fileStatus = if (id >= 0) "Downloading ${entry.name}…" else "Download could not start.") }
+    }
+
     /** Disconnect on the phone: the DISCONNECT button or Back on the session screen ([source] is logged). */
     fun disconnectSession(source: String) {
+        reconnectCancelled = true
         ViewerLog.w("disconnectSession($source) from ${ViewerLog.caller()}")
         controller?.disconnect(source)
     }
@@ -206,7 +325,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Only when the Activity really finishes (not on rotation / configuration change: the ViewModel survives those). */
-    override fun onCleared() { if (controller != null) ViewerLog.w("ViewModel cleared (app closed) -> disconnect"); controller?.disconnect("app-closed") }
+    override fun onCleared() {
+        reconnectCancelled = true
+        if (controller != null) ViewerLog.w("ViewModel cleared (app closed) -> disconnect")
+        controller?.disconnect("app-closed")
+    }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
 

@@ -8,6 +8,8 @@
 //!   void nativeMouse(long h, int kind, int x, int y, int button, int delta)   // kind: 0 move 1 down 2 up 3 wheel
 //!   void nativeSwitchDisplay(long h, int display)
 //!   void nativeSendClipboard(long h, String text)
+//!   void nativeReadRemoteDir(long h, String path)
+//!   int  nativeTransferFile(long h, String from, String to, boolean remoteToLocal)
 //!   void nativeKey(long h, int androidKeyCode, boolean down)
 //!   void nativeText(long h, String text)
 //!   void nativeClose(long h)
@@ -31,6 +33,7 @@
 //! v0.2.2 (ETAP 9 secret handoff): `secret stage=jni_receive|jni_login len= fp= enc=` (+ last_pw=) lines (fingerprint =
 //!    first 8 hex of SHA-256, nestra_config::secret_diag) so the grant can be matched with the API, agent and engine.
 
+use crate::client::FileManager;
 use crate::flutter_ffi::SessionID;
 use crate::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL};
 use base::message_proto::*;
@@ -39,7 +42,7 @@ use jni::objects::{GlobalRef, JCharArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
 use jni::{JNIEnv, JavaVM};
 use std::os::raw::{c_char, c_int, c_void};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::Duration;
 
@@ -144,6 +147,7 @@ lazy_static::lazy_static! {
 }
 static INIT: Once = Once::new();
 static GEN: AtomicU64 = AtomicU64::new(0);
+static FILE_JOB_ID: AtomicI32 = AtomicI32::new(1000);
 
 fn jvm(ptr: usize) -> Option<JavaVM> {
     unsafe { JavaVM::from_raw(ptr as *mut jni::sys::JavaVM) }.ok()
@@ -367,6 +371,24 @@ pub fn on_event(token: usize, json: &str) {
                 warn("clipboard received but refused: content too large");
             }
         }
+        "file_dir" | "empty_dirs" | "job_progress" | "job_done" | "job_error" => {
+            let target = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone()));
+            if let Some((vm, cb)) = target {
+                if let Some(jvm) = jvm(vm) {
+                    if let Ok(mut env) = jvm.attach_current_thread_as_daemon() {
+                        if let (Ok(jname), Ok(jjson)) = (env.new_string(name), env.new_string(json)) {
+                            let _ = env.call_method(
+                                cb.as_obj(),
+                                "onFileEvent",
+                                "(Ljava/lang/String;Ljava/lang/String;)V",
+                                &[JValue::Object(&*jname), JValue::Object(&*jjson)],
+                            );
+                        }
+                    }
+                }
+            }
+            info(&format!("file event {name}"));
+        }
         "connection_ready" => {
             // transport chosen by the client: secure (E2EE), direct (P2P) or relay, stream type (TCP/UDP/WebRTC)
             info(&format!("connection_ready: {}", json.chars().take(200).collect::<String>()));
@@ -587,6 +609,33 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSendClip
     msg.set_clipboard(Clipboard { content: t.as_bytes().to_vec().into(), ..Default::default() });
     crate::flutter::send_clipboard_msg(msg, false);
     info(&format!("clipboard sent: {} UTF-8 bytes", t.len()));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeReadRemoteDir(mut env: JNIEnv, _c: JClass, h: jlong, path: JString) {
+    let Ok(path) = env.get_string(&path) else { return };
+    let path: String = path.into();
+    with_session(h, |s| s.read_remote_dir(path, false));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeTransferFile(
+    mut env: JNIEnv,
+    _c: JClass,
+    h: jlong,
+    from: JString,
+    to: JString,
+    remote_to_local: jboolean,
+) -> jint {
+    let Ok(from) = env.get_string(&from) else { return -1 };
+    let Ok(to) = env.get_string(&to) else { return -1 };
+    let from: String = from.into();
+    let to: String = to.into();
+    if from.is_empty() || to.is_empty() { return -1; }
+    let id = FILE_JOB_ID.fetch_add(1, Ordering::Relaxed).max(1000);
+    with_session(h, |s| s.send_files(id, 0, from, to, 0, false, remote_to_local != 0));
+    info(&format!("file transfer started: job={id} direction={}", if remote_to_local != 0 { "download" } else { "upload" }));
+    id
 }
 
 #[no_mangle]

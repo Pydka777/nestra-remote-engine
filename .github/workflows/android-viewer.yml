@@ -153,7 +153,7 @@ jobs:
           cp upstream-src/target/${{ matrix.job.target }}/release/liblibrustdesk.so $D/libnestra_viewer.so
           cp $NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.job.libcxx }}/libc++_shared.so $D/
           # the JNI contract of NativeViewer.kt must be exported
-          for f in nativeAbiVersion nativeInit nativeConnect nativeSetSurface nativeMouse nativeSwitchDisplay nativeSendClipboard nativeKey nativeText nativeClose; do
+          for f in nativeAbiVersion nativeInit nativeConnect nativeSetSurface nativeMouse nativeSwitchDisplay nativeSendClipboard nativeReadRemoteDir nativeTransferFile nativeKey nativeText nativeClose; do
             $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --defined-only $D/libnestra_viewer.so | grep -q "Java_com_nestra_remote_viewer_NativeViewer_$f" || { echo "missing JNI symbol $f"; exit 1; }
           done
           grep -a -q "remote.nestraparent.com" $D/libnestra_viewer.so

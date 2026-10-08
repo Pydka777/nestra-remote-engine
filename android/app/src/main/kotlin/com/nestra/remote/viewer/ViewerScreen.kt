@@ -6,7 +6,10 @@ import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -20,6 +23,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -75,8 +82,12 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var dragMode by remember { mutableStateOf(false) }
     var touchpadMode by remember { mutableStateOf(true) }
     var sessionBarVisible by remember { mutableStateOf(true) }
+    var filesVisible by remember { mutableStateOf(false) }
     var currentDisplay by remember { mutableStateOf(0) }
     val context = LocalContext.current
+    val uploadPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.uploadUri(uri)
+    }
     var cursorRemote by remember(s.remoteWidth, s.remoteHeight) {
         mutableStateOf(Offset((s.remoteWidth.coerceAtLeast(1) / 2f), (s.remoteHeight.coerceAtLeast(1) / 2f)))
     }
@@ -100,6 +111,10 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { vm.viewer?.sendClipboard(it) }
                     }, modifier = Modifier.padding(start = 6.dp)) { Text("Clipboard", color = Color.White) }
+                    OutlinedButton(onClick = {
+                        filesVisible = !filesVisible
+                        if (filesVisible && s.remoteFiles.isEmpty()) vm.openRemoteFiles("")
+                    }, modifier = Modifier.padding(start = 6.dp)) { Text("Files", color = Color.White) }
                     OutlinedButton(onClick = { scale = 1f; offset = Offset.Zero }, modifier = Modifier.padding(start = 6.dp)) { Text("Fit", color = Color.White) }
                     OutlinedButton(onClick = { sessionBarVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
                 }
@@ -271,6 +286,41 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         close()
                     }
                     drawPath(q, Color.White)
+                }
+            }
+            if (filesVisible && st is State.Active) {
+                Column(
+                    Modifier
+                        .align(Alignment.Center)
+                        .widthIn(min = 320.dp, max = 620.dp)
+                        .heightIn(max = 430.dp)
+                        .background(Color(0xEE16191D))
+                        .padding(12.dp)
+                ) {
+                    Text("FILES · ${s.remotePath.ifBlank { "PC home" }}", color = Color.White, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { vm.remoteFilesUp() }) { Text("Up", color = Color.White) }
+                        OutlinedButton(onClick = { uploadPicker.launch(arrayOf("*/*")) }, modifier = Modifier.padding(start = 6.dp)) { Text("Upload", color = Color.White) }
+                        OutlinedButton(onClick = { vm.openRemoteFiles(s.remotePath) }, modifier = Modifier.padding(start = 6.dp)) { Text("Refresh", color = Color.White) }
+                        Box(Modifier.weight(1f))
+                        OutlinedButton(onClick = { filesVisible = false }) { Text("Close", color = Color.White) }
+                    }
+                    s.fileStatus?.let { Text(it, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f).padding(top = 6.dp)) {
+                        items(s.remoteFiles, key = { it.name + ":" + it.entryType }) { entry ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable {
+                                    if (entry.isDirectory || entry.isDrive) vm.openRemoteEntry(entry) else vm.downloadRemoteFile(entry)
+                                }.padding(vertical = 8.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(if (entry.isDirectory || entry.isDrive) "📁" else "📄", fontSize = 18.sp)
+                                Text(entry.name, color = Color.White, modifier = Modifier.padding(start = 8.dp).weight(1f))
+                                if (!(entry.isDirectory || entry.isDrive)) Text("${entry.size} B", color = Color.LightGray, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    Text("Tap a folder to open it. Tap a file to download it to NESTRA Remote/Downloads.", color = Color.LightGray, fontSize = 11.sp)
                 }
             }
             if (st !is State.Active) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
