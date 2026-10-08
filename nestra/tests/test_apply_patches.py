@@ -41,7 +41,17 @@ FILES = {
         '                } else if name == "permanent-password" {\n',
     "src/server.rs": 'pub use connection::*;\n\nmod connection;\nmod login_failure_check;\n',
     "src/server/connection.rs":
-        '                _ = second_timer.tick() => {\n                    #[cfg(windows)]\n                    conn.portable_check();\n',
+        '                _ = second_timer.tick() => {\n                    #[cfg(windows)]\n                    conn.portable_check();\n'
+        '    fn validate_password(&mut self, allow_permanent_password: bool) -> bool {\n'
+        '        if password::temporary_enabled() {\n'
+        '            let password = password::temporary_password();\n'
+        '            if self.validate_password_plain(&password) {\n'
+        '                self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::TemporaryPassword);\n',
+    "src/client.rs":
+        '    // last password\n'
+        '    let mut password = lc.read().unwrap().password.clone();\n'
+        '    // preset password\n'
+        '    if password.is_empty() {\n',
     "src/flutter.rs":
         'pub struct FlutterHandler {\n'
         '    // ui session id -> display handler data\n'
@@ -93,6 +103,18 @@ ipc = R("src/ipc.rs")
 check("ipc keys", 'name == "nestra-authed"' in ipc and 'name == "nestra-grant"' in ipc and 'name == "nestra-close"' in ipc)
 check("server close flag + count", "pub static NESTRA_CLOSE" in R("src/server.rs") and "fn nestra_authed_count" in R("src/server.rs"))
 check("connection closes on tick", "NESTRA_CLOSE.load" in R("src/server/connection.rs"))
+check("nestra-grant is acknowledged with the fingerprint of the password held (never the value)",
+      'let fp = crate::nestra_config::fingerprint(&held);' in ipc and 'stream.send(&Data::Config((name.clone(), Some(fp))))' in ipc
+      and 'Some(value' not in ipc.split('name == "nestra-grant"')[1].split('name == "nestra-close"')[0])
+check("nestra-close rotates the temporary password and is acknowledged",
+      'if value == "1" {\n                        password::update_temporary_password();' in ipc
+      and 'Some(value.clone())' in ipc.split('name == "nestra-close"')[1].split('name == "temporary-password"')[0])
+cn = R("src/server/connection.rs")
+check("login check logs the held temporary password's fingerprint + result, decision unchanged",
+      'secret_diag(\"engine_login_check\", &password)' in cn)
+check("login decision still validate_password_plain", "let nestra_ok = self.validate_password_plain(&password);" in cn and "if nestra_ok {" in cn)
+check("android handle_hash reports the preset fingerprint input (android only)",
+      '#[cfg(target_os = "android")]\n    crate::nestra_viewer::on_login_secret(password_preset, !password.is_empty());\n    // preset password' in R("src/client.rs"))
 fl = R("src/flutter.rs")
 check("android hooks carry the handler token", "nestra_viewer::on_frame(self.nestra_token(), display, rgba)" in fl
       and "nestra_viewer::on_event(self.nestra_token(), &out)" in fl)

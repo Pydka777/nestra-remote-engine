@@ -110,8 +110,10 @@ class LiveSessionController(
                     when {
                         s.connect != null -> {
                             val c = s.connect
-                            target = ViewerTarget(c.engineId, c.rendezvousHost, c.serverKey, c.takeGrant())
+                            val t = ViewerTarget(c.engineId, c.rendezvousHost, c.serverKey, c.takeGrant())
+                            target = t
                             log("connect data received once: engine ${Redact.engine(c.engineId)}, host ${c.rendezvousHost}, grant in memory (not logged)")
+                            log(SecretDiag.describe("android_receive", t.grant()))
                         }
                         s.state == "refused" -> { sessionId = null; return final(State.Refused(Refusal.LAPTOP_REFUSED, s.endReason)) }
                         s.state == "expired" -> { sessionId = null; return final(State.Refused(Refusal.EXPIRED, s.endReason)) }
@@ -206,7 +208,7 @@ object Redact {
     fun id(s: String?): String = if (s.isNullOrEmpty()) "-" else s.take(4) + "…"
     fun engine(s: String?): String = if (s.isNullOrEmpty()) "-" else "…" + s.takeLast(3)
     private val longToken = Regex("[A-Za-z0-9+/=_-]{24,}")
-    private val longDigits = Regex("\\d{8,}")
+    private val longDigits = Regex("(?<!fp=)\\d{8,}")   // a fingerprint (fp=, 8 hex) stays readable even if all digits
     fun line(s: String): String = longDigits.replace(longToken.replace(s, "<redacted>")) { "…" + it.value.takeLast(3) }.take(400)
 }
 

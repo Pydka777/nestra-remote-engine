@@ -10,6 +10,7 @@ import com.nestra.remote.core.session.LiveSessionController.Refusal
 import com.nestra.remote.core.session.LiveSessionController.State
 import com.nestra.remote.core.session.LiveSessionText
 import com.nestra.remote.core.session.Redact
+import com.nestra.remote.core.session.SecretDiag
 import com.nestra.remote.core.session.RemoteSession
 import com.nestra.remote.core.session.RemoteViewer
 import com.nestra.remote.core.session.ViewerTarget
@@ -27,10 +28,12 @@ class FakeViewer : RemoteViewer {
     @Volatile var target: String? = null           // "engine|host|key|grant" captured at connect time (copy)
     @Volatile var events: RemoteViewer.Events? = null
     @Volatile var disconnects = 0
+    @Volatile var grantSeen: CharArray? = null     // copy of the chars handed to the native core
     var throwOnConnect = false
     override fun connect(target: ViewerTarget, events: RemoteViewer.Events) {
         if (throwOnConnect) throw IllegalStateException("native core missing")
         this.target = "${target.engineId}|${target.rendezvousHost}|${target.serverKey}|${String(target.grant())}"
+        this.grantSeen = target.grant().copyOf()
         this.events = events
     }
     override fun disconnect() { disconnects++ }
@@ -236,5 +239,37 @@ class LiveSessionTests {
         // redaction is a second line of defence for anything token-like
         assertEquals("x <redacted> y …789", Redact.line("x ${"a".repeat(43)} y 123456789"))
         assertEquals("gt0v…", Redact.id(PC)); assertEquals("…796", Redact.engine("487102796"))
+    }
+
+    @Test fun secretHandoffDiagnosticsCarryTheGrantFingerprintNeverTheGrant() {
+        val (b, s) = world()
+        val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val v = FakeViewer()
+        val c = LiveSessionController(s, v, pollMs = 10, keepaliveMs = 30, connectTimeoutMs = 5000, diag = { lines += it })
+        val run = Run(c)
+        until("requested") { b.onlySession() != null }
+        val sid = b.onlySession()!!
+        b.pc(sid, "accepted"); until("connect") { v.target != null }
+        val grant = b.grantOf(sid)
+        val viewerGot = SecretDiag.describe("x", v.grantSeen!!)                 // what reached the viewer (JNI)
+        v.events!!.onClosed("login_failed")
+        assertEquals(State.Ended("login_failed"), run.join())
+        val all = lines.joinToString("\n")
+        val expectedFp = java.security.MessageDigest.getInstance("SHA-256").digest(grant.toByteArray(Charsets.UTF_8))
+            .take(4).joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        assertTrue("android_receive line missing in:\n$all", all.contains("secret stage=android_receive len=43 fp=$expectedFp enc=base64url-ascii"))
+        assertTrue("viewer received a different secret", viewerGot.endsWith("len=43 fp=$expectedFp enc=base64url-ascii"))
+        assertFalse("grant in diagnostics", all.contains(grant))
+    }
+
+    @Test fun secretFingerprintMatchesTheCrossLanguageVector() {
+        // the same vector is asserted in the API/agent tests (C#) and the engine's nestra_config tests (Rust)
+        assertEquals("secret stage=t len=43 fp=4ee44f50 enc=base64url-ascii",
+            SecretDiag.describe("t", "NESTRA_test-vector_0123456789abcdefghijklmn".toCharArray()))
+        assertEquals("secret stage=t len=44 fp=4909e47f enc=ascii-other",
+            SecretDiag.describe("t", "NESTRA_test-vector_0123456789abcdefghijklmn\n".toCharArray()))
+        assertEquals("secret stage=t len=2 fp=4a99557e enc=non-ascii", SecretDiag.describe("t", charArrayOf('\u00e9')))
+        // a fingerprint stays readable in redacted lines, even when it is all digits
+        assertEquals("fp=12345678 id …789", Redact.line("fp=12345678 id 123456789"))
     }
 }

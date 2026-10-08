@@ -134,6 +134,19 @@ jobs:
           echo '{"v":1,"sessionId":"x","grant":"x","expiresUtc":"x","server":"evil.example","key":"x"}' \
             | timeout 60 "$EXE" --nestra-session | tee probe.txt
           grep -q "NESTRA-SESSION ended engine_failed" probe.txt
+          # ETAP 9 secret handoff: a well-formed grant that NO engine service confirms fails closed (never "ready"),
+          # the diagnostics carry only the fingerprint, and --nestra-close without a confirming service is close_failed
+          G="NESTRA_test-vector_0123456789abcdefghijklmn"
+          EXP=$(date -u -d '+60 seconds' +%Y-%m-%dT%H:%M:%SZ)
+          echo "{\"v\":1,\"sessionId\":\"0123456789abcdefghjkmnpqrs\",\"grant\":\"$G\",\"expiresUtc\":\"$EXP\",\"server\":\"remote.nestraparent.com\",\"key\":\"AZgwj6064Sndiv07Av1O8rn5E0GyNJz7BPQzS7TsnXo=\"}" \
+            | timeout 90 "$EXE" --nestra-session | tee probe2.txt
+          grep -q "NESTRA-SESSION diag secret stage=engine_stdin len=43 fp=4ee44f50 enc=base64url-ascii" probe2.txt
+          grep -q "NESTRA-SESSION diag secret stage=engine_installed result=unanswered" probe2.txt
+          grep -q "NESTRA-SESSION ended engine_failed" probe2.txt
+          ! grep -q "NESTRA-SESSION ready" probe2.txt
+          ! grep -q "$G" probe2.txt
+          timeout 60 "$EXE" --nestra-close | tee probe3.txt
+          grep -q "NESTRA-SESSION close_failed" probe3.txt
           echo "BINARY CHECKS: GREEN"
 
       - uses: actions/upload-artifact@v4

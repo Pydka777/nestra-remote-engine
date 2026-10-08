@@ -15,9 +15,12 @@ Changes (all listed in CHANGES-FROM-UPSTREAM.md, AGPL section 5a):
   src/common.rs             get_key() always returns the NESTRA key
   src/lib.rs                + nestra_config (all), nestra_session (Windows), nestra_viewer (Android)
   src/core_main.rs          nestra_config::enforce() in every engine process; CLI modes --nestra-session, --nestra-close
-  src/ipc.rs                engine-local IPC keys: get "nestra-authed"; set "nestra-grant", "nestra-close"
+  src/ipc.rs                engine-local IPC keys: get "nestra-authed"; set "nestra-grant" (acknowledged with the
+                            fingerprint of the password held), "nestra-close" (rotates + closes; acknowledged)
   src/server.rs             NESTRA_CLOSE flag + nestra_authed_count()
-  src/server/connection.rs  an authorised connection closes on its next 1 s tick when NESTRA_CLOSE is set
+  src/server/connection.rs  an authorised connection closes on its next 1 s tick when NESTRA_CLOSE is set;
+                            the temporary-password login check logs the held password's fingerprint + result
+  src/client.rs             Android only: handle_hash reports the preset secret's fingerprint (nestra_viewer)
   src/flutter.rs            Android viewer hooks: frames -> Surface (nestra_viewer::on_frame), events -> on_event,
                             both with the handler's owner token (FlutterHandler::nestra_token, appended)
 """
@@ -116,11 +119,34 @@ edit(IPC,
      '                } else if name == "temporary-password" {\n'
      '                    password::update_temporary_password();\n',
      '                } else if name == "nestra-grant" {\n'
+     '                    // NESTRA Remote: acknowledged with the fingerprint of the password now held (never the value)\n'
      '                    password::set_temporary_password_exact(&value);\n'
+     '                    let held = password::temporary_password();\n'
+     '                    log::info!("NESTRA {}", crate::nestra_config::secret_diag("engine_installed", &held));\n'
+     '                    let fp = crate::nestra_config::fingerprint(&held);\n'
+     '                    allow_err!(stream.send(&Data::Config((name.clone(), Some(fp)))).await);\n'
      '                } else if name == "nestra-close" {\n'
+     '                    // NESTRA Remote: "1" = rotate the temporary password away + close every connection; acknowledged\n'
+     '                    if value == "1" {\n'
+     '                        password::update_temporary_password();\n'
+     '                    }\n'
      '                    crate::server::NESTRA_CLOSE.store(value == "1", std::sync::atomic::Ordering::SeqCst);\n'
+     '                    allow_err!(stream.send(&Data::Config((name.clone(), Some(value.clone())))).await);\n'
      '                } else if name == "temporary-password" {\n'
      '                    password::update_temporary_password();\n')
+
+# login check on the PC: which temporary password (fingerprint only) the engine service compared against
+edit("src/server/connection.rs",
+     "            let password = password::temporary_password();\n"
+     "            if self.validate_password_plain(&password) {\n",
+     "            let password = password::temporary_password();\n"
+     "            let nestra_ok = self.validate_password_plain(&password);\n"
+     "            log::info!(\n"
+     "                \"NESTRA {} result={}\",\n"
+     "                crate::nestra_config::secret_diag(\"engine_login_check\", &password),\n"
+     "                if nestra_ok { \"match\" } else { \"wrong_password\" }\n"
+     "            );\n"
+     "            if nestra_ok {\n")
 
 # ---------------------------------------------------------------------------------------------- server close + count
 after("src/server.rs", "\nmod connection;\n",
@@ -148,6 +174,12 @@ after("src/flutter.rs",
       '        #[cfg(target_os = "android")]\n        crate::nestra_viewer::on_event(self.nestra_token(), &out);\n')
 edit("src/flutter.rs", "pub struct FlutterHandler {\n    // ui session id -> display handler data\n    session_handlers: Arc<RwLock<HashMap<SessionID, SessionHandler>>>,\n",
      "pub struct FlutterHandler {\n    // ui session id -> display handler data\n    session_handlers: Arc<RwLock<HashMap<SessionID, SessionHandler>>>,\n")   # anchor check only (field the token is taken from)
+# Android viewer: the exact secret the login hash is computed from (fingerprint only) and whether an older
+# "last password" would override the preset grant (upstream application order in client.rs handle_hash)
+after("src/client.rs",
+      "    // last password\n    let mut password = lc.read().unwrap().password.clone();\n",
+      "    #[cfg(target_os = \"android\")]\n"
+      "    crate::nestra_viewer::on_login_secret(password_preset, !password.is_empty());\n")
 append("src/flutter.rs",
        "\n/// NESTRA Remote: owner token of a session's FlutterHandler (the Arc is shared by all clones of that handler), so the\n"
        "/// Android viewer can tell its own session's frames/events from those of an older, closing session.\n"

@@ -26,6 +26,8 @@
 //!    at the first transient failure; login failures and non-retryable errors still close at once;
 //!  - an insecure (non end-to-end encrypted) connection is never accepted: closed with reason insecure_connection.
 //!  - a missing Surface (recreated SurfaceView, app in background, configuration change) never closes the session.
+//! v0.2.2 (ETAP 9 secret handoff): `secret stage=jni_receive|jni_login len= fp= enc=` (+ last_pw=) lines (fingerprint =
+//!    first 8 hex of SHA-256, nestra_config::secret_diag) so the grant can be matched with the API, agent and engine.
 
 use crate::flutter_ffi::SessionID;
 use crate::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL};
@@ -79,6 +81,8 @@ fn redact(s: &str) -> String {
     let flush = |run: &mut String, out: &mut String| {
         if run.len() >= 24 {
             out.push_str("<redacted>");
+        } else if out.ends_with("fp=") || out.ends_with("expected=") {
+            out.push_str(run); // a fingerprint (8 hex) is shown as is, even when it happens to be all digits
         } else if run.len() >= 8 && run.bytes().all(|b| b.is_ascii_digit()) {
             out.push_str("...");
             out.push_str(&run[run.len() - 3..]);
@@ -300,6 +304,16 @@ fn field<'a>(e: &'a serde_json::Value, k: &str) -> &'a str {
 }
 
 /// Hook from FlutterHandler::push_event_ (JSON with "name").
+/// Called by the patched client.rs handle_hash (Android) right before the login hash is built from the preset
+/// password (= the grant): fingerprint only. `last_password_set` = an older "last password" that would take
+/// precedence over the grant in upstream's application order (never expected for a fresh NESTRA session).
+pub fn on_login_secret(preset: &str, last_password_set: bool) {
+    info(&format!(
+        "{} last_pw={last_password_set}",
+        crate::nestra_config::secret_diag("jni_login", preset)
+    ));
+}
+
 pub fn on_event(token: usize, json: &str) {
     let Ok(e) = serde_json::from_str::<serde_json::Value>(json) else { return };
     let name = field(&e, "name");
@@ -424,7 +438,8 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeConnect(
     let (Ok(vm), Ok(cb)) = (env.get_java_vm(), env.new_global_ref(cb)) else { return refuse("JNI references") };
     let vm = vm.get_java_vm_pointer() as usize;
     let session_id = uuid::Uuid::new_v4();
-    info(&format!("nativeConnect: engine {engine}, grant in memory ({} chars, not logged); session_add", password.len()));
+    info(&format!("nativeConnect: engine {engine}, grant in memory (not logged); session_add"));
+    info(&crate::nestra_config::secret_diag("jni_receive", &password));
     let added = crate::flutter::session_add(
         &session_id, &engine, false, false, false, false, false, "", false, password.clone(), false, None,
     );

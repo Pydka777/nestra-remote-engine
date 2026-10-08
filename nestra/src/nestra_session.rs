@@ -9,11 +9,20 @@
 //! console session, so UAC and the lock screen stay visible and controllable) over the engine's local IPC:
 //!   "nestra-grant"   the grant becomes the ONE temporary password (verification is temporary-password only, see
 //!                    nestra_config). Upstream rotates it right after a successful login: one connection per grant.
+//!                    ACKNOWLEDGED: the engine service answers with the fingerprint of the password it now holds; no
+//!                    answer or a different fingerprint = the grant is NOT installed -> "ended engine_failed".
 //!   "nestra-authed"  number of authorised remote-desktop connections
-//!   "nestra-close"   "1" closes every remote connection on its next tick, "0" re-arms
+//!   "nestra-close"   "1" rotates the temporary password away and closes every remote connection on its next tick,
+//!                    "0" re-arms; ACKNOWLEDGED (the value is echoed back)
 //! Second documented mode: `--nestra-close` (no input) closes every remote connection now and prints
-//! "NESTRA-SESSION closed".
-//! The grant is never printed, logged or written to disk, and never on a command line.
+//! "NESTRA-SESSION closed" only when the engine service confirmed it ("NESTRA-SESSION close_failed" otherwise).
+//! The grant is never printed, logged or written to disk, and never on a command line. Diagnostics carry only
+//! `secret stage=… len=… fp=… enc=…` (nestra_config::secret_diag) as "NESTRA-SESSION diag …" lines.
+//!
+//! The engine service only answers IPC from the SAME executable (upstream 1.5.0 ipc/auth.rs: peer executable path
+//! must match), so this mode must be started from the installed engine (the engine service's own exe), not a copy.
+//! Before v0.2.1-engine the writes were fire-and-forget: from a copy they were silently dropped, "ready" was still
+//! printed, and every viewer got "Wrong Password" (ETAP 9 device test, 2026-10-08).
 
 use hbb_common::log;
 use std::io::{BufRead, Write};
@@ -29,12 +38,31 @@ fn field(v: &serde_json::Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned()
 }
 
-fn ipc_set(name: &str, value: &str) -> bool {
-    crate::ipc::set_config(name, value.to_owned()).is_ok()
+/// Writes an engine IPC key and waits for the engine service's answer (None = not delivered / not answered).
+fn ipc_set_ack(name: &str, value: &str) -> Option<String> {
+    let rt = hbb_common::tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+    rt.block_on(async {
+        let mut c = crate::ipc::connect(1000, "").await.ok()?;
+        c.send(&crate::ipc::Data::Config((name.to_owned(), Some(value.to_owned())))).await.ok()?;
+        match c.next_timeout(3000).await {
+            Ok(Some(crate::ipc::Data::Config((n, Some(v))))) if n == name => Some(v),
+            _ => None,
+        }
+    })
+}
+
+fn diag(line: &str) {
+    log::info!("NESTRA {line}");
+    out(&format!("diag {line}"));
 }
 
 fn ipc_get(name: &str) -> Option<String> {
     crate::ipc::get_config(name).ok().flatten()
+}
+
+/// An answer is shown only if it looks like a fingerprint (8 hex).
+fn redact_fp(s: &str) -> &str {
+    if s.len() == 8 && s.bytes().all(|b| b.is_ascii_hexdigit()) { s } else { "(invalid)" }
 }
 
 fn valid_grant(g: &str) -> bool {
@@ -48,22 +76,32 @@ fn valid_session_id(s: &str) -> bool {
 /// Rotates the temporary password away and closes every authorised remote connection (idempotent).
 /// Also the documented CLI `--nestra-close`, used by the NESTRA Remote service at start-up, on Remote Access OFF,
 /// on service stop and after a crashed session process, so no connection can outlive its authorisation.
-pub fn close_all() {
-    let _ = crate::ipc::update_temporary_password();
-    let _ = ipc_set("nestra-close", "1");
+/// True only when the engine service confirmed both steps.
+pub fn close_all() -> bool {
+    let closed = ipc_set_ack("nestra-close", "1").as_deref() == Some("1"); // rotates + closes (engine service side)
     std::thread::sleep(Duration::from_millis(2500)); // connections close on their next 1 s tick
-    let _ = ipc_set("nestra-close", "0");
+    let rearmed = ipc_set_ack("nestra-close", "0").as_deref() == Some("0");
+    if !(closed && rearmed) {
+        log::error!("NESTRA close NOT confirmed by the engine service (closed={closed}, rearmed={rearmed})");
+    }
+    closed && rearmed
 }
 
 /// `--nestra-close`
 pub fn run_close() {
-    close_all();
-    out("closed");
+    if close_all() {
+        out("closed");
+    } else {
+        diag("ipc stage=engine_close result=unanswered hint=not_engine_service_exe");
+        out("close_failed");
+    }
 }
 
 /// Ends the session: grant rotated away, every connection closed, then the end line.
 fn finish(reason: &str) -> ! {
-    close_all();
+    if !close_all() {
+        diag("ipc stage=engine_close result=unanswered");
+    }
     log::info!("NESTRA session ended ({reason})");
     out(&format!("ended {reason}"));
     std::process::exit(0)
@@ -107,14 +145,30 @@ pub fn run() {
         return;
     }
     let deadline = Instant::now() + left;
-    let engine_id = crate::ipc::get_id();
-    if engine_id.is_empty() || !ipc_set("nestra-close", "0") || !ipc_set("nestra-grant", &grant) {
-        grant.replace_range(.., &"0".repeat(grant.len()));
-        out("ended engine_failed");
-        return;
-    }
+    diag(&crate::nestra_config::secret_diag("engine_stdin", &grant));
+    let expected = crate::nestra_config::fingerprint(&grant);
+    // the engine ID from the engine service itself (no fallback to this process's own config)
+    let engine_id = ipc_get("id").unwrap_or_default();
+    let rearmed = ipc_set_ack("nestra-close", "0").as_deref() == Some("0");
+    let installed = if rearmed { ipc_set_ack("nestra-grant", &grant) } else { None };
     grant.replace_range(.., &"0".repeat(grant.len()));
     drop(grant);
+    match installed.as_deref() {
+        Some(fp) if fp == expected => diag(&format!("secret stage=engine_installed fp={fp} result=match")),
+        Some(fp) => {
+            diag(&format!("secret stage=engine_installed fp={} expected={expected} result=MISMATCH", redact_fp(fp)));
+            finish("engine_failed");
+        }
+        None => {
+            diag("secret stage=engine_installed result=unanswered hint=not_engine_service_exe");
+            out("ended engine_failed");
+            return;
+        }
+    }
+    if engine_id.is_empty() || !engine_id.bytes().all(|b| b.is_ascii_digit()) {
+        diag("ipc stage=engine_id result=unanswered");
+        finish("engine_failed");
+    }
     log::info!("NESTRA session {sid}: waiting for one viewer");
     out(&format!("ready {engine_id}"));
 

@@ -1,0 +1,6 @@
+ab4e6c71b96b851de45a8a9bd86369e7dbc2130a44b3b4520564be94847910f2  jniLibs/arm64-v8a/libc++_shared.so
+87f53178e83c5ac12b5180b5d48f728c352b226f67f129444934ae36c2e9ac22  jniLibs/arm64-v8a/libnestra_viewer.so
+10ee48131d6742899619f7cfb3b8df150ad787d723c766a3fb80d4bb275711ff  jniLibs/armeabi-v7a/libc++_shared.so
+ae65c1fafd0c02e08a465b803a8ff12759fe9d92158e0ecd0daa1dd6b71048cd  jniLibs/armeabi-v7a/libnestra_viewer.so
+e4cd73c8a3607269f3be58d15c21f78bff112e27f9398d6261e5f965668f8746  jniLibs/x86_64/libc++_shared.so
+fc11f0917bbbd6de0f924d360175f0f043770bd2be42b2d647cbd00194fccdfa  jniLibs/x86_64/libnestra_viewer.so

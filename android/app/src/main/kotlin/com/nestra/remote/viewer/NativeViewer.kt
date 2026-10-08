@@ -2,6 +2,7 @@ package com.nestra.remote.viewer
 
 import android.view.Surface
 import com.nestra.remote.core.session.RemoteViewer
+import com.nestra.remote.core.session.SecretDiag
 import com.nestra.remote.core.session.ViewerTarget
 import java.util.concurrent.atomic.AtomicLong
 
@@ -45,6 +46,7 @@ class RustDeskViewer(private val appDir: String, private val onSize: (Int, Int) 
         check(NativeViewer.available) { "native viewer missing" }
         NativeViewer.nativeInit(appDir)
         ViewerLog.i("nativeConnect: $target (grant not logged), surface ${if (surface != null) "ready" else "not yet"}")
+        ViewerLog.i(SecretDiag.describe("android_jni_call", target.grant()))
         val h = NativeViewer.nativeConnect(target.engineId, target.rendezvousHost, target.serverKey, target.grant(), object : NativeViewer.Callback {
             override fun onConnected(width: Int, height: Int) { ViewerLog.i("callback onConnected ${width}x$height"); onSize(width, height); events.onConnected() }
             override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSize(width, height) }
