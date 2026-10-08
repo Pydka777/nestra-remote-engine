@@ -348,6 +348,10 @@ pub fn on_event(token: usize, json: &str) {
                 }
                 info(&format!("initial display list: {count} display(s)"));
             }
+            if session.get_toggle_option("disable-audio".to_owned()) {
+                session.toggle_option("disable-audio".to_owned());
+                info("audio restored ON for NESTRA owner session");
+            }
             session.switch_display(0);
             session.refresh_video(0);
         }
