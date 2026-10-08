@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
@@ -224,16 +226,36 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                 val uy = cursorRemote.y / rh * view.height
                 val sx = (ux - cx) * scale + cx + offset.x
                 val sy = (uy - cy) * scale + cy + offset.y
-                Text(
-                    "➤",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
+                Canvas(
                     modifier = Modifier
-                        .offset { IntOffset((sx - 6).toInt(), (sy - 11).toInt()) }
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .padding(horizontal = 2.dp)
-                )
+                        .offset { IntOffset(sx.toInt(), sy.toInt()) }
+                        .size(28.dp)
+                ) {
+                    // Cursor hotspot is exactly the top-left point (0,0), matching the real Windows cursor hotspot.
+                    val p = Path().apply {
+                        moveTo(0f, 0f)
+                        lineTo(0f, size.height * 0.82f)
+                        lineTo(size.width * 0.24f, size.height * 0.64f)
+                        lineTo(size.width * 0.42f, size.height)
+                        lineTo(size.width * 0.58f, size.height * 0.91f)
+                        lineTo(size.width * 0.40f, size.height * 0.57f)
+                        lineTo(size.width * 0.78f, size.height * 0.57f)
+                        close()
+                    }
+                    drawPath(p, Color.Black)
+                    val inset = 2.2f
+                    val q = Path().apply {
+                        moveTo(inset, inset)
+                        lineTo(inset, size.height * 0.74f)
+                        lineTo(size.width * 0.25f, size.height * 0.58f)
+                        lineTo(size.width * 0.43f, size.height * 0.91f)
+                        lineTo(size.width * 0.51f, size.height * 0.86f)
+                        lineTo(size.width * 0.34f, size.height * 0.53f)
+                        lineTo(size.width * 0.69f, size.height * 0.53f)
+                        close()
+                    }
+                    drawPath(q, Color.White)
+                }
             }
             if (st !is State.Active) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(36.dp), color = Color.White)
