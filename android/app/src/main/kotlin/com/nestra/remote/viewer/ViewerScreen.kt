@@ -55,7 +55,7 @@ import com.nestra.remote.ui.UiState
  * SurfaceView (never screenshots). Input: one finger moves the remote cursor without holding a button; tap = left
  * click; long press without movement = right click. Dragging is explicit via the Drag toolbar mode. Two fingers = scroll
  * (or pan when zoomed), pinch = zoom on the phone, keyboard button = text + keys.
- * A red "REMOTE SESSION ACTIVE" bar with DISCONNECT is always visible; Back also disconnects.
+ * The red session controls can be hidden on the phone and restored with a small REMOTE button; Back also disconnects.
  */
 @Composable
 fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
@@ -66,16 +66,29 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var offset by remember { mutableStateOf(Offset.Zero) }
     var keyboard by remember { mutableStateOf(false) }
     var dragMode by remember { mutableStateOf(false) }
+    var sessionBarVisible by remember { mutableStateOf(true) }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
-        Row(Modifier.fillMaxWidth().background(Color(0xFFB00020)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (st is State.Active) "REMOTE SESSION ACTIVE · $pcName" else "Connecting to $pcName…",
-                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            if (st is State.Active) {
-                OutlinedButton(onClick = { dragMode = !dragMode }) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
-                OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+        if (sessionBarVisible) {
+            Row(Modifier.fillMaxWidth().background(Color(0xFFB00020)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (st is State.Active) "REMOTE SESSION ACTIVE · $pcName" else "Connecting to $pcName…",
+                    color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                if (st is State.Active) {
+                    OutlinedButton(onClick = { dragMode = !dragMode }) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
+                    OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+                    OutlinedButton(onClick = { sessionBarVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
+                }
+                Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
             }
-            Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
+        } else if (st is State.Active) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f))
+                Button(
+                    onClick = { sessionBarVisible = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB00020)),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                ) { Text("REMOTE", color = Color.White, fontWeight = FontWeight.Bold) }
+            }
         }
         Box(Modifier.fillMaxSize().onSizeChanged { view = it }) {
             val viewer = vm.viewer
