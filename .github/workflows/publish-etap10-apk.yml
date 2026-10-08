@@ -1,0 +1,49 @@
+name: publish-etap10-apk
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/publish-etap10-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: etap10-7ae580a
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Restore verified ETAP 10 JNI libraries
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/nestra-viewer
+          gh release download "$TAG" -R "$REPO" -p nestra-viewer-android.zip -p nestra-viewer-android.zip.sha256 -D /tmp/nestra-viewer
+          cd /tmp/nestra-viewer
+          sha256sum -c nestra-viewer-android.zip.sha256
+          unzip -q nestra-viewer-android.zip -d extracted
+          rm -rf "$GITHUB_WORKSPACE/android/app/src/main/jniLibs"
+          cp -a extracted/jniLibs "$GITHUB_WORKSPACE/android/app/src/main/"
+          cp extracted/BUILD-INFO.txt "$GITHUB_WORKSPACE/android/app/src/main/assets/licenses/BUILD-INFO.txt"
+          cp extracted/SHA256SUMS "$GITHUB_WORKSPACE/android/app/src/main/assets/licenses/SHA256SUMS"
+      - name: Build NESTRA Remote Android v0.3.0
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew clean :core:test :app:assembleDebug -PnestraSourceUrl=https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+      - name: Verify and publish APK
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          cp "$APK" NESTRA-Remote-v0.3.0-debug.apk
+          sha256sum NESTRA-Remote-v0.3.0-debug.apk > NESTRA-Remote-v0.3.0-debug.apk.sha256
+          gh release upload "$TAG" -R "$REPO" --clobber NESTRA-Remote-v0.3.0-debug.apk NESTRA-Remote-v0.3.0-debug.apk.sha256
