@@ -7,6 +7,12 @@
 name: android-viewer
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'nestra/**'
+      - 'android/**'
+      - '.github/workflows/android-viewer.yml'
 permissions:
   contents: read
 env:
