@@ -122,6 +122,20 @@ check("FlutterHandler::nestra_token appended (android only, from the shared sess
       fl.rstrip().endswith("}") and "impl FlutterHandler {\n    pub fn nestra_token(&self) -> usize {\n        Arc::as_ptr(&self.session_handlers)" in fl
       and fl.count("#[cfg(target_os = \"android\")]\nimpl FlutterHandler") == 1)
 check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs")))
+viewer = R("src/nestra_viewer.rs")
+check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",
+      "const ABI: jint = 3;" in viewer
+      and "nativeSwitchDisplay" in viewer and "nativeSendClipboard" in viewer
+      and "nativeToggleAudio" in viewer and "nativeReadRemoteDir" in viewer and "nativeTransferFile" in viewer)
+check("multi-monitor renderer follows the selected display, not hard-coded display 0",
+      "current_display: usize" in viewer and "display != v.current_display" in viewer
+      and "v.current_display = display as usize;" in viewer)
+check("privileged engine settings stay fail-closed while ETAP 10 owner tools are allowed",
+      '("enable-audio", "Y")' in R("src/nestra_config.rs")
+      and '("enable-file-transfer", "Y")' in R("src/nestra_config.rs")
+      and '("enable-clipboard", "Y")' in R("src/nestra_config.rs")
+      and '("enable-tunnel", "N")' in R("src/nestra_config.rs")
+      and '("enable-terminal", "N")' in R("src/nestra_config.rs"))
 r2 = run(d)
 check("second run refused (no double patch)", r2.returncode != 0 and "ALREADY PATCHED" in (r2.stdout + r2.stderr))
 d3 = tree()

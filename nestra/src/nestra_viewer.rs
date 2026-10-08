@@ -135,6 +135,7 @@ struct Viewer {
     cb: GlobalRef,
     vm: usize, // *mut jni::sys::JavaVM
     size: (usize, usize),
+    current_display: usize,
     connected: bool, // first frame drawn
     logged_in: bool, // peer_info received (the PC accepted the grant)
     closing: bool,   // the app asked to close: no onClosed callback
@@ -256,7 +257,7 @@ pub fn on_frame(token: usize, display: usize, rgba: &scrap::ImageRgb) -> bool {
     if v.token != token {
         return false; // not our session's handler
     }
-    if display != 0 || rgba.w == 0 || rgba.h == 0 {
+    if display != v.current_display || rgba.w == 0 || rgba.h == 0 {
         return true;
     }
     let (w, h) = (rgba.w, rgba.h);
@@ -527,6 +528,7 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeConnect(
         cb,
         vm,
         size: (0, 0),
+        current_display: 0,
         connected: false,
         logged_in: false,
         closing: false,
@@ -605,10 +607,16 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeMouse(
 #[no_mangle]
 pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSwitchDisplay(_e: JNIEnv, _c: JClass, h: jlong, display: jint) {
     if !(0..16).contains(&display) { return; }
-    with_session(h, |s| {
-        s.switch_display(display);
-        s.refresh_video(display);
-    });
+    let Some(gen) = gen_of(h) else { return };
+    let session = {
+        let mut lock = VIEWER.lock().unwrap();
+        let Some(v) = lock.as_mut().filter(|v| v.gen == gen) else { return };
+        v.current_display = display as usize;
+        v.size = (0, 0); // force onResolution for the selected monitor's first frame
+        v.session.clone()
+    };
+    session.switch_display(display);
+    session.refresh_video(display);
     info(&format!("switch display -> {display}"));
 }
 

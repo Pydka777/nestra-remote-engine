@@ -17,5 +17,6 @@ exact diff as `nestra-changes.diff`.
 | 2026-10-08 | src/ipc.rs | `nestra-grant` is acknowledged with the SHA-256 fingerprint (8 hex) of the temporary password now held; `nestra-close` rotates the temporary password and is acknowledged; `--nestra-session` / `--nestra-close` fail closed without the acknowledgement |
 | 2026-10-08 | src/server/connection.rs | the temporary-password login check logs the held password's fingerprint and the result (never the password) |
 | 2026-10-08 | src/client.rs | Android only: `handle_hash` reports the fingerprint of the preset password to `nestra_viewer` (diagnostics) |
-| 2026-10-08 | settings (nestra_config) | enforced via OVERWRITE_SETTINGS: temporary password only, password approval, no hidden connection manager, audio / file transfer / clipboard / tunnel / terminal / camera / printer / remote restart / recording / remote config / direct IP / LAN discovery OFF |
+| 2026-10-08 | settings (nestra_config) | enforced via OVERWRITE_SETTINGS: temporary password only and password approval; ETAP 10 permits audio, file transfer and clipboard only inside the authenticated owner session; tunnel / terminal / camera / printer / remote restart / recording / remote config / direct IP / LAN discovery stay forced OFF |
+| 2026-10-08 | src/nestra_viewer.rs | Android JNI ABI 3: selected-monitor rendering/switching, clipboard, file transfer, owner-session audio control, lifecycle-safe Surface handling and bounded reconnect diagnostics |
 | (later) | branding | name and icons -> NESTRA Remote; "based on RustDesk" kept in About |
