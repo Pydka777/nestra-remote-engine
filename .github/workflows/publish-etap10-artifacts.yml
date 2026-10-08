@@ -1,0 +1,47 @@
+name: publish-etap10-artifacts
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/publish-etap10-artifacts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: etap10-7ae580a
+      WIN_RUN: "37835719924"
+      ANDROID_RUN: "37835719814"
+    steps:
+      - name: Download verified ETAP 10 artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist/windows dist/android
+          gh run download "$WIN_RUN" -R "$REPO" -n nestra-remote-engine-windows-x86 -D dist/windows
+          gh run download "$ANDROID_RUN" -R "$REPO" -n nestra-viewer-android -D dist/android
+          find dist -maxdepth 2 -type f -print
+      - name: Verify expected files
+        run: |
+          set -euo pipefail
+          test -f dist/windows/nestra-remote-engine-windows-x86.zip
+          test -f dist/windows/nestra-remote-engine-windows-x86.zip.sha256
+          test -f dist/android/nestra-viewer-android.zip
+          test -f dist/android/nestra-viewer-android.zip.sha256
+          cd dist/windows
+          sha256sum -c nestra-remote-engine-windows-x86.zip.sha256
+          cd ../android
+          sha256sum -c nestra-viewer-android.zip.sha256
+      - name: Publish prerelease assets
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$REPO" --prerelease --title "NESTRA Remote ETAP 10 build 7ae580a" --notes "Automated ETAP 10 artifacts from successful GitHub Actions runs for commit 7ae580a020c2fd90dfea02372f305034bb16fdde."
+          fi
+          gh release upload "$TAG" -R "$REPO" --clobber             dist/windows/nestra-remote-engine-windows-x86.zip             dist/windows/nestra-remote-engine-windows-x86.zip.sha256             dist/android/nestra-viewer-android.zip             dist/android/nestra-viewer-android.zip.sha256
