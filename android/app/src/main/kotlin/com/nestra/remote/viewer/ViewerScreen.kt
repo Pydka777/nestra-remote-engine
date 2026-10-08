@@ -124,15 +124,14 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                 modifier = Modifier.fillMaxSize()
                     .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
                     .pointerInput(s.remoteWidth, s.remoteHeight, touchpadMode, dragMode) {
-                        // view point -> remote PC pixel (letterboxed fit, then the local zoom/pan)
+                        // Native rendering fills the SurfaceView, so map X/Y independently and then undo local zoom/pan.
                         fun map(p: Offset): Pair<Int, Int> {
                             val rw = s.remoteWidth.toFloat(); val rh = s.remoteHeight.toFloat()
                             if (rw <= 0f || rh <= 0f || view.width == 0) return 0 to 0
                             val cx = view.width / 2f; val cy = view.height / 2f
                             val ux = (p.x - cx - offset.x) / scale + cx; val uy = (p.y - cy - offset.y) / scale + cy
-                            val fit = minOf(view.width / rw, view.height / rh)
-                            val ox = (view.width - rw * fit) / 2f; val oy = (view.height - rh * fit) / 2f
-                            return (((ux - ox) / fit).coerceIn(0f, rw - 1)).toInt() to (((uy - oy) / fit).coerceIn(0f, rh - 1)).toInt()
+                            return ((ux / view.width * rw).coerceIn(0f, rw - 1)).toInt() to
+                                ((uy / view.height * rh).coerceIn(0f, rh - 1)).toInt()
                         }
                         awaitEachGesture {
                             val down = awaitFirstDown()
@@ -220,10 +219,9 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
             )
             if (st is State.Active && touchpadMode && s.remoteWidth > 0 && s.remoteHeight > 0 && view.width > 0 && view.height > 0) {
                 val rw = s.remoteWidth.toFloat(); val rh = s.remoteHeight.toFloat()
-                val fit = minOf(view.width / rw, view.height / rh)
-                val ox = (view.width - rw * fit) / 2f; val oy = (view.height - rh * fit) / 2f
                 val cx = view.width / 2f; val cy = view.height / 2f
-                val ux = ox + cursorRemote.x * fit; val uy = oy + cursorRemote.y * fit
+                val ux = cursorRemote.x / rw * view.width
+                val uy = cursorRemote.y / rh * view.height
                 val sx = (ux - cx) * scale + cx + offset.x
                 val sy = (uy - cy) * scale + cy + offset.y
                 Text(

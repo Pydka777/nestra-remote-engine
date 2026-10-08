@@ -12,8 +12,8 @@ android {
         applicationId = "com.nestra.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.7"       // NESTRA Remote Android v0.2.7 - touchpad cursor + Fit reset + bounded zoom/pan
+        versionCode = 10
+        versionName = "0.2.8"       // NESTRA Remote Android v0.2.8 - cursor projection sync with full SurfaceView rendering
         buildConfigField("String", "PARENT_BASE_URL", "\"https://panel.nestraparent.com\"")
         buildConfigField("String", "REMOTE_BASE_URL", "\"https://remote.nestraparent.com\"")
         // AGPL-3.0 (the APK contains the RustDesk core): public Corresponding Source. Set before distributing any APK.
