@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,15 +68,21 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var offset by remember { mutableStateOf(Offset.Zero) }
     var keyboard by remember { mutableStateOf(false) }
     var dragMode by remember { mutableStateOf(false) }
+    var touchpadMode by remember { mutableStateOf(true) }
     var sessionBarVisible by remember { mutableStateOf(true) }
+    var cursorRemote by remember(s.remoteWidth, s.remoteHeight) {
+        mutableStateOf(Offset((s.remoteWidth.coerceAtLeast(1) / 2f), (s.remoteHeight.coerceAtLeast(1) / 2f)))
+    }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         if (sessionBarVisible) {
             Row(Modifier.fillMaxWidth().background(Color(0xFFB00020)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (st is State.Active) "REMOTE SESSION ACTIVE · $pcName" else "Connecting to $pcName…",
                     color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
                 if (st is State.Active) {
-                    OutlinedButton(onClick = { dragMode = !dragMode }) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
+                    OutlinedButton(onClick = { touchpadMode = !touchpadMode }) { Text(if (touchpadMode) "Touchpad" else "Direct", color = Color.White) }
+                    OutlinedButton(onClick = { dragMode = !dragMode }, modifier = Modifier.padding(start = 6.dp)) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
                     OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+                    OutlinedButton(onClick = { scale = 1f; offset = Offset.Zero }, modifier = Modifier.padding(start = 6.dp)) { Text("Fit", color = Color.White) }
                     OutlinedButton(onClick = { sessionBarVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
                 }
                 Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
@@ -115,7 +123,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                 } },
                 modifier = Modifier.fillMaxSize()
                     .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
-                    .pointerInput(s.remoteWidth, s.remoteHeight) {
+                    .pointerInput(s.remoteWidth, s.remoteHeight, touchpadMode, dragMode) {
                         // view point -> remote PC pixel (letterboxed fit, then the local zoom/pan)
                         fun map(p: Offset): Pair<Int, Int> {
                             val rw = s.remoteWidth.toFloat(); val rh = s.remoteHeight.toFloat()
@@ -131,6 +139,8 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                             val t0 = down.uptimeMillis
                             val start = down.position
                             var last = start
+                            var prevFinger = start
+                            val cursorStart = cursorRemote
                             var dragging = false
                             var multi = false
                             var tEnd = t0
@@ -141,30 +151,54 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                                     multi = true
                                     val z = ev.calculateZoom(); val pan = ev.calculatePan()
                                     if (z != 1f) scale = (scale * z).coerceIn(1f, 4f)
-                                    if (scale > 1.01f) offset += pan
-                                    else if (pan.y != 0f) map(pressed[0].position).let { viewer?.mouse(NativeViewer.WHEEL, it.first, it.second, delta = if (pan.y > 0) 1 else -1) }
+                                    if (scale > 1.01f) {
+                                        val maxX = view.width * (scale - 1f) / 2f
+                                        val maxY = view.height * (scale - 1f) / 2f
+                                        offset = Offset((offset.x + pan.x).coerceIn(-maxX, maxX), (offset.y + pan.y).coerceIn(-maxY, maxY))
+                                    } else if (pan.y != 0f) {
+                                        map(pressed[0].position).let { viewer?.mouse(NativeViewer.WHEEL, it.first, it.second, delta = if (pan.y > 0) 1 else -1) }
+                                    }
                                 } else if (pressed.size == 1 && !multi) {
                                     val change = pressed[0]
                                     last = change.position
                                     tEnd = change.uptimeMillis
                                     val distance = (last - start).getDistance()
 
-                                    // Normal one-finger movement is cursor hover only. It must never press LEFT.
-                                    map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
-
-                                    // Dragging is explicit only: the toolbar Drag mode must be enabled first.
-                                    if (dragMode && !dragging && distance > viewConfiguration.touchSlop) {
-                                        dragging = true
-                                        map(start).let { viewer?.mouse(NativeViewer.DOWN, it.first, it.second, NativeViewer.LEFT) }
+                                    if (touchpadMode) {
+                                        if (dragMode && !dragging && distance > viewConfiguration.touchSlop) {
+                                            dragging = true
+                                            viewer?.mouse(NativeViewer.DOWN, cursorStart.x.toInt(), cursorStart.y.toInt(), NativeViewer.LEFT)
+                                        }
+                                        val rw = s.remoteWidth.coerceAtLeast(1).toFloat()
+                                        val rh = s.remoteHeight.coerceAtLeast(1).toFloat()
+                                        val gain = maxOf(rw / view.width.coerceAtLeast(1), rh / view.height.coerceAtLeast(1)) * 1.15f
+                                        val d = last - prevFinger
+                                        cursorRemote = Offset(
+                                            (cursorRemote.x + d.x * gain).coerceIn(0f, rw - 1f),
+                                            (cursorRemote.y + d.y * gain).coerceIn(0f, rh - 1f)
+                                        )
+                                        prevFinger = last
+                                        viewer?.mouse(NativeViewer.MOVE, cursorRemote.x.toInt(), cursorRemote.y.toInt())
+                                    } else {
                                         map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
+                                        if (dragMode && !dragging && distance > viewConfiguration.touchSlop) {
+                                            dragging = true
+                                            map(start).let { viewer?.mouse(NativeViewer.DOWN, it.first, it.second, NativeViewer.LEFT) }
+                                            map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
+                                        }
                                     }
                                 }
                                 ev.changes.firstOrNull()?.let { tEnd = it.uptimeMillis }
                                 ev.changes.forEach { it.consume() }
                             } while (ev.changes.any { it.pressed })
-                            if (multi) return@awaitEachGesture
 
-                            val (x, y) = map(last)
+                            if (multi) {
+                                if (scale < 1.08f) { scale = 1f; offset = Offset.Zero }
+                                return@awaitEachGesture
+                            }
+
+                            val target = if (touchpadMode) cursorRemote.x.toInt() to cursorRemote.y.toInt() else map(last)
+                            val (x, y) = target
                             val distance = (last - start).getDistance()
                             val duration = tEnd - t0
                             when {
@@ -179,11 +213,30 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                                     viewer?.mouse(NativeViewer.DOWN, x, y, NativeViewer.LEFT)
                                     viewer?.mouse(NativeViewer.UP, x, y, NativeViewer.LEFT)
                                 }
-                                else -> Unit // cursor move only
+                                else -> Unit
                             }
                         }
                     },
             )
+            if (st is State.Active && touchpadMode && s.remoteWidth > 0 && s.remoteHeight > 0 && view.width > 0 && view.height > 0) {
+                val rw = s.remoteWidth.toFloat(); val rh = s.remoteHeight.toFloat()
+                val fit = minOf(view.width / rw, view.height / rh)
+                val ox = (view.width - rw * fit) / 2f; val oy = (view.height - rh * fit) / 2f
+                val cx = view.width / 2f; val cy = view.height / 2f
+                val ux = ox + cursorRemote.x * fit; val uy = oy + cursorRemote.y * fit
+                val sx = (ux - cx) * scale + cx + offset.x
+                val sy = (uy - cy) * scale + cy + offset.y
+                Text(
+                    "➤",
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .offset { IntOffset((sx - 6).toInt(), (sy - 11).toInt()) }
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 2.dp)
+                )
+            }
             if (st !is State.Active) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(36.dp), color = Color.White)
                 Text(when (st) {
