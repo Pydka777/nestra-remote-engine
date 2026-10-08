@@ -55,7 +55,7 @@ import com.nestra.remote.ui.UiState
  * SurfaceView (never screenshots). Input: one finger moves the remote cursor without holding a button; tap = left
  * click; long press without movement = right click. Dragging is explicit via the Drag toolbar mode. Two fingers = scroll
  * (or pan when zoomed), pinch = zoom on the phone, keyboard button = text + keys.
- * The red session controls can be hidden on the phone and restored with a small REMOTE button; Back also disconnects.
+ * The red session controls can be fully hidden on the phone; swipe down from the very top edge to restore them. Back also disconnects.
  */
 @Composable
 fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
@@ -80,17 +80,29 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                 Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                     modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
             }
-        } else if (st is State.Active) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f))
-                Button(
-                    onClick = { sessionBarVisible = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB00020)),
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                ) { Text("REMOTE", color = Color.White, fontWeight = FontWeight.Bold) }
-            }
         }
-        Box(Modifier.fillMaxSize().onSizeChanged { view = it }) {
+        Box(
+            Modifier.fillMaxSize()
+                .onSizeChanged { view = it }
+                .pointerInput(sessionBarVisible) {
+                    if (!sessionBarVisible) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            val start = down.position
+                            var last = start
+                            do {
+                                val ev = awaitPointerEvent()
+                                ev.changes.firstOrNull { it.pressed }?.let { last = it.position }
+                            } while (ev.changes.any { it.pressed })
+                            // Hidden really means full-screen. Restore controls with a deliberate swipe down
+                            // that starts at the very top edge, so there is no persistent on-screen banner/button.
+                            if (start.y <= 80f && last.y - start.y > viewConfiguration.touchSlop * 3f) {
+                                sessionBarVisible = true
+                            }
+                        }
+                    }
+                }
+        ) {
             val viewer = vm.viewer
             AndroidView(
                 factory = { ctx -> SurfaceView(ctx).apply {
