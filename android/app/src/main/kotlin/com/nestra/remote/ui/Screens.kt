@@ -306,7 +306,7 @@ private fun ago(iso: String?): String = try {
     Header("Settings", onBack = vm::back)
     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Detail("Signed in", "NESTRA account ${s.accountId ?: "-"}")
-        Detail("App", "NESTRA Remote Android ${BuildConfig.VERSION_NAME} (ETAP 9 build, not production-ready)")
+        Detail("App", "NESTRA Remote Android ${BuildConfig.VERSION_NAME} (ETAP 10 all-in-one test build)")
         Detail("Licence", "NESTRA Remote for Android is free software under the GNU AGPL v3, based on RustDesk. No warranty. " +
             "Source code: ${BuildConfig.SOURCE_URL}")
         Detail("Security", "Your password and MFA codes are never stored. The NESTRA session is encrypted with this phone's Android Keystore; the Remote access token lives only in memory for 5 minutes.")
