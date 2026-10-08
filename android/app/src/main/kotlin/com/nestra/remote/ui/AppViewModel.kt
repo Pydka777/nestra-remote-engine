@@ -206,10 +206,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 end = c.run(deviceId)
                 ViewerLog.i("session finished: $end")
                 controller = null; viewer = null
-                if (!transient(end, reconnectAttempt) || reconnectAttempt >= 8 || reconnectCancelled) break
+                // The server keeps a silent active viewer session for up to 120 s. If the phone loses the network
+                // before it can POST /end, a fresh request may therefore see SESSION_IN_PROGRESS after connectivity
+                // returns. Keep bounded retries alive for >120 s so Wi-Fi <-> LTE handoff can recover without the
+                // user manually waiting for the stale server lease to expire.
+                if (!transient(end, reconnectAttempt) || reconnectAttempt >= 20 || reconnectCancelled) break
                 reconnectAttempt++
-                val waitMs = (1_500L + reconnectAttempt * 1_000L).coerceAtMost(7_500L)
-                ViewerLog.w("transient session end -> reconnect $reconnectAttempt/8 in ${waitMs}ms")
+                val waitMs = (1_500L + reconnectAttempt * 1_000L).coerceAtMost(8_000L)
+                ViewerLog.w("transient session end -> reconnect $reconnectAttempt/20 in ${waitMs}ms")
                 _state.update { it.copy(session = LiveSessionController.State.Requesting, remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
                 delay(waitMs)
             }
@@ -274,6 +278,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         openRemoteFiles(if (cut <= 2) p.take(3) else p.substring(0, cut))
     }
 
+    private fun uniqueName(name: String, existing: Set<String>): String {
+        if (name !in existing) return name
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        for (i in 2..999) {
+            val candidate = "$stem ($i)$ext"
+            if (candidate !in existing) return candidate
+        }
+        return "$stem-${System.currentTimeMillis()}$ext"
+    }
+
     fun uploadUri(uri: Uri) = viewModelScope.launch(Dispatchers.IO) {
         val app = getApplication<Application>()
         val resolver = app.contentResolver
@@ -282,16 +298,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (c.moveToFirst()) name = c.getString(0)?.takeIf { it.isNotBlank() } ?: name
         }
         val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val local = File(app.cacheDir, "nestra-upload-$safe")
+        val remoteName = uniqueName(safe, _state.value.remoteFiles.map { it.name }.toSet())
+        val local = File(app.cacheDir, "nestra-upload-${System.currentTimeMillis()}-$safe")
         resolver.openInputStream(uri)?.use { input -> local.outputStream().use { input.copyTo(it) } } ?: return@launch
         val base = _state.value.remotePath
         val remote = when {
-            base.isBlank() || base == "/" -> safe
-            base.endsWith("\\") -> base + safe
-            else -> "$base\\$safe"
+            base.isBlank() || base == "/" -> remoteName
+            base.endsWith("\\") -> base + remoteName
+            else -> "$base\\$remoteName"
         }
         val id = viewer?.transferFile(local.absolutePath, remote, false) ?: -1
-        _state.update { it.copy(fileStatus = if (id >= 0) "Uploading $safe…" else "Upload could not start.") }
+        _state.update { it.copy(fileStatus = if (id >= 0) "Uploading $remoteName…" else "Upload could not start.") }
     }
 
     fun downloadRemoteFile(entry: RemoteFileEntry) {
@@ -301,9 +318,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val remote = if (base.endsWith("\\")) base + entry.name else "$base\\${entry.name}"
         val dir = app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: app.filesDir
         dir.mkdirs()
-        val local = File(dir, entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        val safe = entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val localName = uniqueName(safe, dir.list()?.toSet() ?: emptySet())
+        val local = File(dir, localName)
         val id = viewer?.transferFile(remote, local.absolutePath, true) ?: -1
-        _state.update { it.copy(fileStatus = if (id >= 0) "Downloading ${entry.name}…" else "Download could not start.") }
+        _state.update { it.copy(fileStatus = if (id >= 0) "Downloading $localName…" else "Download could not start.") }
     }
 
     /** Disconnect on the phone: the DISCONNECT button or Back on the session screen ([source] is logged). */
