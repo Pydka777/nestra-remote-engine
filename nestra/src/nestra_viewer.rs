@@ -549,11 +549,14 @@ fn gen_of(h: jlong) -> Option<u64> {
     }
 }
 
-fn with_session(h: jlong, f: impl FnOnce(&crate::flutter::FlutterSession)) {
-    let Some(gen) = gen_of(h) else { return };
-    let s = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| v.session.clone());
+fn with_session(h: jlong, f: impl FnOnce(&crate::flutter::FlutterSession)) -> bool {
+    let Some(gen) = gen_of(h) else { return false };
+    let s = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen && !v.closing).map(|v| v.session.clone());
     if let Some(s) = s {
         f(&s);
+        true
+    } else {
+        false
     }
 }
 
@@ -622,7 +625,10 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSwitchDi
 
 #[no_mangle]
 pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSendClipboard(mut env: JNIEnv, _c: JClass, h: jlong, text: JString) {
-    if gen_of(h).is_none() { return; }
+    let Some(gen) = gen_of(h) else { return };
+    if !matches!(VIEWER.lock().unwrap().as_ref(), Some(v) if v.gen == gen && !v.closing) {
+        return; // stale handle must never inject clipboard into a newer session via the global upstream helper
+    }
     let Ok(t) = env.get_string(&text) else { return };
     let t: String = t.into();
     if t.is_empty() || t.len() > 1_000_000 { return; }
@@ -660,7 +666,9 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeTransfer
     let to: String = to.into();
     if from.is_empty() || to.is_empty() { return -1; }
     let id = FILE_JOB_ID.fetch_add(1, Ordering::Relaxed).max(1000);
-    with_session(h, |s| s.send_files(id, 0, from, to, 0, false, remote_to_local != 0));
+    if !with_session(h, |s| s.send_files(id, 0, from, to, 0, false, remote_to_local != 0)) {
+        return -1;
+    }
     info(&format!("file transfer started: job={id} direction={}", if remote_to_local != 0 { "download" } else { "upload" }));
     id
 }

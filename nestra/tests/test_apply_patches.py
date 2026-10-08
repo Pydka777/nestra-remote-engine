@@ -130,6 +130,10 @@ check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",
 check("multi-monitor renderer follows the selected display, not hard-coded display 0",
       "current_display: usize" in viewer and "display != v.current_display" in viewer
       and "v.current_display = display as usize;" in viewer)
+check("stale JNI handles cannot act on a newer session or fake a file-transfer start",
+      "filter(|v| v.gen == gen && !v.closing)" in viewer
+      and "if !with_session(h, |s| s.send_files" in viewer
+      and "return -1;" in viewer.split("nativeTransferFile", 1)[1])
 check("privileged engine settings stay fail-closed while ETAP 10 owner tools are allowed",
       '("enable-audio", "Y")' in R("src/nestra_config.rs")
       and '("enable-file-transfer", "Y")' in R("src/nestra_config.rs")
