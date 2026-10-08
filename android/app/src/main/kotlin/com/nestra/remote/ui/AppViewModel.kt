@@ -1,6 +1,9 @@
 package com.nestra.remote.ui
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nestra.remote.NestraRemoteApp
@@ -46,6 +49,7 @@ data class UiState(
     val session: LiveSessionController.State? = null,
     val remoteWidth: Int = 0,
     val remoteHeight: Int = 0,
+    val displayCount: Int = 1,
 )
 
 /**
@@ -150,7 +154,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             say("This app build does not contain the remote desktop viewer (RustDesk core). Install the NESTRA Remote APK built with the viewer.")
             return
         }
-        val v = RustDeskViewer(getApplication<Application>().filesDir.absolutePath) { w, h -> _state.update { it.copy(remoteWidth = w, remoteHeight = h) } }
+        val app = getApplication<Application>()
+        val v = RustDeskViewer(
+            app.filesDir.absolutePath,
+            onSize = { w, h -> _state.update { it.copy(remoteWidth = w, remoteHeight = h) } },
+            onDisplays = { count -> _state.update { it.copy(displayCount = count.coerceAtLeast(1)) } },
+            onClipboard = { text ->
+                val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("NESTRA Remote", text))
+            },
+        )
         val c = LiveSessionController(session, v, diag = ViewerLog::i)
         ViewerLog.i("Connect tapped (app ${com.nestra.remote.BuildConfig.VERSION_NAME}); native viewer ABI ${NativeViewer.ABI}")
         viewer = v; controller = c

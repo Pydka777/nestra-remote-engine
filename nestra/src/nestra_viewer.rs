@@ -1,15 +1,17 @@
 //! NESTRA Remote viewer core for Android (AGPL-3.0, part of librustdesk in the public engine fork).
 //!
-//! JNI contract with com.nestra.remote.viewer.NativeViewer (NESTRA Remote Android app; ABI 2):
+//! JNI contract with com.nestra.remote.viewer.NativeViewer (NESTRA Remote Android app; ABI 3):
 //!   int  nativeAbiVersion()
 //!   void nativeInit(String appDir)                     // once per process: upstream main_init + NESTRA settings
 //!   long nativeConnect(String engineId, String host, String key, char[] grant, Callback cb)   // 0 = refused
 //!   void nativeSetSurface(long h, Surface s)          // frames of display 0 are drawn here (RGBA_8888)
 //!   void nativeMouse(long h, int kind, int x, int y, int button, int delta)   // kind: 0 move 1 down 2 up 3 wheel
+//!   void nativeSwitchDisplay(long h, int display)
+//!   void nativeSendClipboard(long h, String text)
 //!   void nativeKey(long h, int androidKeyCode, boolean down)
 //!   void nativeText(long h, String text)
 //!   void nativeClose(long h)
-//!   Callback: onConnected(int w, int h), onResolution(int w, int h), onClosed(String reason)
+//!   Callback: onConnected, onResolution, onDisplays, onClipboard, onClosed
 //!
 //! Built on the upstream Flutter session (FlutterHandler implements the UI trait): session_add + io_loop, with two
 //! hooks in flutter.rs - decoded frames come to `on_frame` (drawn into the app's Surface, never stored), UI events
@@ -31,6 +33,7 @@
 
 use crate::flutter_ffi::SessionID;
 use crate::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL};
+use base::message_proto::*;
 use hbb_common::log;
 use jni::objects::{GlobalRef, JCharArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
@@ -40,7 +43,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::Duration;
 
-const ABI: jint = 2;
+const ABI: jint = 3;
 const HANDLE_BASE: jlong = 0x4e52_0000_0000; // | generation: a stale handle never reaches a newer session
 const MAX_RETRIES: u32 = 2;
 const ERROR_GRACE: Duration = Duration::from_secs(8); // an error msgbox that does not end io_loop closes after this
@@ -335,6 +338,35 @@ pub fn on_event(token: usize, json: &str) {
             session.switch_display(0);
             session.refresh_video(0);
         }
+        "sync_peer_info" => {
+            let displays = field(&e, "displays");
+            if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(displays) {
+                let count = list.len().max(1) as jint;
+                let target = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone()));
+                if let Some((vm, cb)) = target {
+                    callback(vm, &cb, "onDisplays", "(I)V", &[JValue::Int(count)]);
+                }
+                info(&format!("display list updated: {count} display(s)"));
+            }
+        }
+        "clipboard" => {
+            let content = field(&e, "content");
+            if content.len() <= 1_000_000 {
+                let target = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone()));
+                if let Some((vm, cb)) = target {
+                    if let Some(jvm) = jvm(vm) {
+                        if let Ok(mut env) = jvm.attach_current_thread_as_daemon() {
+                            if let Ok(s) = env.new_string(content) {
+                                let _ = env.call_method(cb.as_obj(), "onClipboard", "(Ljava/lang/String;)V", &[JValue::Object(&*s)]);
+                            }
+                        }
+                    }
+                }
+                info(&format!("clipboard received: {} UTF-8 bytes", content.len()));
+            } else {
+                warn("clipboard received but refused: content too large");
+            }
+        }
         "connection_ready" => {
             // transport chosen by the client: secure (E2EE), direct (P2P) or relay, stream type (TCP/UDP/WebRTC)
             info(&format!("connection_ready: {}", json.chars().take(200).collect::<String>()));
@@ -533,6 +565,28 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeMouse(
         3 => s.send_mouse(MOUSE_TYPE_WHEEL, 0, delta, false, false, false, false),
         _ => {}
     });
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSwitchDisplay(_e: JNIEnv, _c: JClass, h: jlong, display: jint) {
+    if !(0..16).contains(&display) { return; }
+    with_session(h, |s| {
+        s.switch_display(display);
+        s.refresh_video(display);
+    });
+    info(&format!("switch display -> {display}"));
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeSendClipboard(mut env: JNIEnv, _c: JClass, h: jlong, text: JString) {
+    if gen_of(h).is_none() { return; }
+    let Ok(t) = env.get_string(&text) else { return };
+    let t: String = t.into();
+    if t.is_empty() || t.len() > 1_000_000 { return; }
+    let mut msg = Message::new();
+    msg.set_clipboard(Clipboard { content: t.as_bytes().to_vec().into(), ..Default::default() });
+    crate::flutter::send_clipboard_msg(msg, false);
+    info(&format!("clipboard sent: {} UTF-8 bytes", t.len()));
 }
 
 #[no_mangle]

@@ -14,12 +14,14 @@ import java.util.concurrent.atomic.AtomicLong
  * picture, no screenshots, nothing that pretends to be the screen.
  */
 object NativeViewer {
-    const val ABI = 2
+    const val ABI = 3
     val available: Boolean = try { System.loadLibrary("nestra_viewer"); nativeAbiVersion() == ABI } catch (e: UnsatisfiedLinkError) { false }
 
     interface Callback {
         fun onConnected(width: Int, height: Int)
         fun onResolution(width: Int, height: Int)
+        fun onDisplays(count: Int)
+        fun onClipboard(text: String)
         fun onClosed(reason: String)
     }
 
@@ -31,6 +33,8 @@ object NativeViewer {
     @JvmStatic external fun nativeMouse(handle: Long, kind: Int, x: Int, y: Int, button: Int, delta: Int)
     @JvmStatic external fun nativeKey(handle: Long, androidKeyCode: Int, down: Boolean)
     @JvmStatic external fun nativeText(handle: Long, text: String)
+    @JvmStatic external fun nativeSwitchDisplay(handle: Long, display: Int)
+    @JvmStatic external fun nativeSendClipboard(handle: Long, text: String)
     @JvmStatic external fun nativeClose(handle: Long)
 
     const val MOVE = 0; const val DOWN = 1; const val UP = 2; const val WHEEL = 3
@@ -38,7 +42,12 @@ object NativeViewer {
 }
 
 /** RemoteViewer (core contract) implemented by the native RustDesk core. One instance per session. */
-class RustDeskViewer(private val appDir: String, private val onSize: (Int, Int) -> Unit) : RemoteViewer {
+class RustDeskViewer(
+    private val appDir: String,
+    private val onSize: (Int, Int) -> Unit,
+    private val onDisplays: (Int) -> Unit,
+    private val onClipboard: (String) -> Unit,
+) : RemoteViewer {
     private val handle = AtomicLong(0)
     @Volatile private var surface: Surface? = null
 
@@ -50,6 +59,8 @@ class RustDeskViewer(private val appDir: String, private val onSize: (Int, Int) 
         val h = NativeViewer.nativeConnect(target.engineId, target.rendezvousHost, target.serverKey, target.grant(), object : NativeViewer.Callback {
             override fun onConnected(width: Int, height: Int) { ViewerLog.i("callback onConnected ${width}x$height"); onSize(width, height); events.onConnected() }
             override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSize(width, height) }
+            override fun onDisplays(count: Int) { ViewerLog.i("callback onDisplays count=$count"); onDisplays(count.coerceAtLeast(1)) }
+            override fun onClipboard(text: String) { ViewerLog.i("callback onClipboard ${text.toByteArray().size} bytes"); onClipboard(text) }
             override fun onClosed(reason: String) { ViewerLog.w("callback onClosed($reason) from the native core"); events.onClosed(reason) }
         })
         ViewerLog.i(if (h != 0L) "nativeConnect ok (generation ${h and 0xFFFFL})" else "nativeConnect REFUSED (see the native line before)")
@@ -76,4 +87,6 @@ class RustDeskViewer(private val appDir: String, private val onSize: (Int, Int) 
     }
     fun key(code: Int, down: Boolean) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeKey(it, code, down) } }
     fun text(t: String) { if (t.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeText(it, t) } }
+    fun switchDisplay(display: Int) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSwitchDisplay(it, display) } }
+    fun sendClipboard(text: String) { if (text.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSendClipboard(it, text) } }
 }

@@ -3,8 +3,8 @@
 //! `enforce()` runs at the start of every engine process (patched core_main) and puts the values below into
 //! hbb_common's OVERWRITE_SETTINGS, which take priority over the config file, the UI and IPC writes and are never
 //! saved. So no user setting, config file, custom-client file or IPC client can point this build at another server,
-//! enable a permanent password, click-free approval, audio, file transfer, clipboard, tunnels, terminal or direct
-//! IP access.
+//! enable a permanent password, click-free approval, tunnels, terminal or direct IP access. ETAP 10 intentionally
+//! allows only clipboard, file transfer and audio inside an authenticated owner session.
 
 use hbb_common::config::{NESTRA_RENDEZVOUS_SERVER, OVERWRITE_SETTINGS, RS_PUB_KEY};
 
@@ -24,9 +24,9 @@ const ENGINE: &[(&str, &str)] = &[
     ("verification-method", "use-temporary-password"),
     ("approve-mode", "password"),
     ("allow-hide-cm", "N"),
-    ("enable-audio", "N"),
-    ("enable-file-transfer", "N"),
-    ("enable-clipboard", "N"),
+    ("enable-audio", "Y"),
+    ("enable-file-transfer", "Y"),
+    ("enable-clipboard", "Y"),
     ("enable-tunnel", "N"),
     ("enable-terminal", "N"),
     ("enable-camera", "N"),

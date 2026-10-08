@@ -1,5 +1,7 @@
 package com.nestra.remote.viewer
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -41,6 +43,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +75,8 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var dragMode by remember { mutableStateOf(false) }
     var touchpadMode by remember { mutableStateOf(true) }
     var sessionBarVisible by remember { mutableStateOf(true) }
+    var currentDisplay by remember { mutableStateOf(0) }
+    val context = LocalContext.current
     var cursorRemote by remember(s.remoteWidth, s.remoteHeight) {
         mutableStateOf(Offset((s.remoteWidth.coerceAtLeast(1) / 2f), (s.remoteHeight.coerceAtLeast(1) / 2f)))
     }
@@ -84,6 +89,17 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                     OutlinedButton(onClick = { touchpadMode = !touchpadMode }) { Text(if (touchpadMode) "Touchpad" else "Direct", color = Color.White) }
                     OutlinedButton(onClick = { dragMode = !dragMode }, modifier = Modifier.padding(start = 6.dp)) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
                     OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+                    if (s.displayCount > 1) {
+                        OutlinedButton(onClick = {
+                            currentDisplay = (currentDisplay + 1) % s.displayCount
+                            vm.viewer?.switchDisplay(currentDisplay)
+                            scale = 1f; offset = Offset.Zero
+                        }, modifier = Modifier.padding(start = 6.dp)) { Text("Screen ${currentDisplay + 1}/${s.displayCount}", color = Color.White) }
+                    }
+                    OutlinedButton(onClick = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }?.let { vm.viewer?.sendClipboard(it) }
+                    }, modifier = Modifier.padding(start = 6.dp)) { Text("Clipboard", color = Color.White) }
                     OutlinedButton(onClick = { scale = 1f; offset = Offset.Zero }, modifier = Modifier.padding(start = 6.dp)) { Text("Fit", color = Color.White) }
                     OutlinedButton(onClick = { sessionBarVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
                 }
