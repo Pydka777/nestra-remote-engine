@@ -182,9 +182,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             },
             onFileEvent = ::handleFileEvent,
         )
-        fun transient(end: LiveSessionController.State): Boolean = when (end) {
+        fun transient(end: LiveSessionController.State, attempt: Int): Boolean = when (end) {
             is LiveSessionController.State.Ended -> end.reason in setOf("connection_error", "engine_closed", "engine_exited", "viewer_failed")
-            is LiveSessionController.State.Refused -> end.why == LiveSessionController.Refusal.NETWORK || end.why == LiveSessionController.Refusal.DEVICE_OFFLINE
+            is LiveSessionController.State.Refused ->
+                end.why == LiveSessionController.Refusal.NETWORK ||
+                    end.why == LiveSessionController.Refusal.DEVICE_OFFLINE ||
+                    (attempt > 0 && end.why == LiveSessionController.Refusal.SESSION_IN_PROGRESS)
             else -> false
         }
 
@@ -203,10 +206,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 end = c.run(deviceId)
                 ViewerLog.i("session finished: $end")
                 controller = null; viewer = null
-                if (!transient(end) || reconnectAttempt >= 3 || reconnectCancelled) break
+                if (!transient(end, reconnectAttempt) || reconnectAttempt >= 8 || reconnectCancelled) break
                 reconnectAttempt++
-                val waitMs = reconnectAttempt * 1_500L
-                ViewerLog.w("transient session end -> reconnect $reconnectAttempt/3 in ${waitMs}ms")
+                val waitMs = (1_500L + reconnectAttempt * 1_000L).coerceAtMost(7_500L)
+                ViewerLog.w("transient session end -> reconnect $reconnectAttempt/8 in ${waitMs}ms")
                 _state.update { it.copy(session = LiveSessionController.State.Requesting, remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
                 delay(waitMs)
             }
