@@ -52,8 +52,9 @@ import com.nestra.remote.ui.UiState
 
 /**
  * ETAP 9 live session screen. The picture is the native RustDesk core drawing the PC's REAL screen into a
- * SurfaceView (never screenshots). Input: tap = left click, long press = right click, one-finger drag = drag with the
- * left button, two fingers = scroll (or pan when zoomed), pinch = zoom on the phone, keyboard button = text + keys.
+ * SurfaceView (never screenshots). Input: one finger moves the remote cursor without holding a button; tap = left
+ * click; long press without movement = right click; long press then move = left-button drag. Two fingers = scroll
+ * (or pan when zoomed), pinch = zoom on the phone, keyboard button = text + keys.
  * A red "REMOTE SESSION ACTIVE" bar with DISCONNECT is always visible; Back also disconnects.
  */
 @Composable
@@ -98,8 +99,12 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         }
                         awaitEachGesture {
                             val down = awaitFirstDown()
-                            val t0 = down.uptimeMillis; val start = down.position
-                            var last = start; var dragging = false; var multi = false; var tEnd = t0
+                            val t0 = down.uptimeMillis
+                            val start = down.position
+                            var last = start
+                            var dragging = false
+                            var multi = false
+                            var tEnd = t0
                             do {
                                 val ev = awaitPointerEvent()
                                 val pressed = ev.changes.filter { it.pressed }
@@ -110,26 +115,43 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                                     if (scale > 1.01f) offset += pan
                                     else if (pan.y != 0f) map(pressed[0].position).let { viewer?.mouse(NativeViewer.WHEEL, it.first, it.second, delta = if (pan.y > 0) 1 else -1) }
                                 } else if (pressed.size == 1 && !multi) {
-                                    last = pressed[0].position
-                                    if (!dragging && (last - start).getDistance() > viewConfiguration.touchSlop) {
+                                    val change = pressed[0]
+                                    last = change.position
+                                    tEnd = change.uptimeMillis
+                                    val distance = (last - start).getDistance()
+                                    val heldLongEnough = tEnd - t0 >= viewConfiguration.longPressTimeoutMillis
+
+                                    // Normal one-finger movement is cursor hover only. Never hold LEFT just because
+                                    // the finger moved: doing so selected text and dragged windows accidentally.
+                                    map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
+
+                                    // Drag is deliberate: hold, then move beyond touch slop.
+                                    if (!dragging && heldLongEnough && distance > viewConfiguration.touchSlop) {
                                         dragging = true
-                                        map(start).let { viewer?.mouse(NativeViewer.DOWN, it.first, it.second, NativeViewer.LEFT) }
+                                        map(last).let { viewer?.mouse(NativeViewer.DOWN, it.first, it.second, NativeViewer.LEFT) }
                                     }
-                                    if (dragging) map(last).let { viewer?.mouse(NativeViewer.MOVE, it.first, it.second) }
                                 }
                                 ev.changes.firstOrNull()?.let { tEnd = it.uptimeMillis }
                                 ev.changes.forEach { it.consume() }
                             } while (ev.changes.any { it.pressed })
                             if (multi) return@awaitEachGesture
+
                             val (x, y) = map(last)
+                            val distance = (last - start).getDistance()
+                            val duration = tEnd - t0
                             when {
                                 dragging -> viewer?.mouse(NativeViewer.UP, x, y, NativeViewer.LEFT)
-                                else -> {
-                                    val button = if (tEnd - t0 >= viewConfiguration.longPressTimeoutMillis) NativeViewer.RIGHT else NativeViewer.LEFT
+                                duration >= viewConfiguration.longPressTimeoutMillis && distance <= viewConfiguration.touchSlop -> {
                                     viewer?.mouse(NativeViewer.MOVE, x, y)
-                                    viewer?.mouse(NativeViewer.DOWN, x, y, button)
-                                    viewer?.mouse(NativeViewer.UP, x, y, button)
+                                    viewer?.mouse(NativeViewer.DOWN, x, y, NativeViewer.RIGHT)
+                                    viewer?.mouse(NativeViewer.UP, x, y, NativeViewer.RIGHT)
                                 }
+                                distance <= viewConfiguration.touchSlop -> {
+                                    viewer?.mouse(NativeViewer.MOVE, x, y)
+                                    viewer?.mouse(NativeViewer.DOWN, x, y, NativeViewer.LEFT)
+                                    viewer?.mouse(NativeViewer.UP, x, y, NativeViewer.LEFT)
+                                }
+                                else -> Unit // cursor move only
                             }
                         }
                     },

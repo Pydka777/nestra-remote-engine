@@ -12,8 +12,8 @@ android {
         applicationId = "com.nestra.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2"       // NESTRA Remote Android v0.2.2 - ETAP 9 secret-handoff diagnostics (logcat NESTRA-VIEWER), NOT production-ready
+        versionCode = 5
+        versionName = "0.2.3"       // NESTRA Remote Android v0.2.3 - ETAP 9 touch/mouse UX fix + secret-handoff diagnostics, NOT production-ready
         buildConfigField("String", "PARENT_BASE_URL", "\"https://panel.nestraparent.com\"")
         buildConfigField("String", "REMOTE_BASE_URL", "\"https://remote.nestraparent.com\"")
         // AGPL-3.0 (the APK contains the RustDesk core): public Corresponding Source. Set before distributing any APK.
