@@ -85,6 +85,13 @@ fun AppRoot(vm: AppViewModel) {
 @Composable private fun Header(title: String, onBack: (() -> Unit)? = null, action: (@Composable () -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) TextButton(onClick = onBack) { Text("Back") } else Spacer(Modifier.width(12.dp))
+        Image(
+            painter = painterResource(R.drawable.nestra_remote_icon),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(30.dp).clip(RoundedCornerShape(7.dp))
+        )
+        Spacer(Modifier.width(9.dp))
         Text(title, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = NrColors.Text)
         action?.invoke()
     }
