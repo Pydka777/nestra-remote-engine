@@ -1,0 +1,37 @@
+name: publish-v034-final
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/publish-v034-final.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: v0.3.4-final
+      WIN_RUN: "37938648770"
+      ANDROID_RUN: "37940217195"
+    steps:
+      - name: Download final artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist/windows dist/android
+          gh run download "$WIN_RUN" -R "$REPO" -n nestra-remote-engine-windows-x86 -D dist/windows
+          gh run download "$ANDROID_RUN" -R "$REPO" -n nestra-viewer-android -D dist/android
+          cd dist/windows && sha256sum -c nestra-remote-engine-windows-x86.zip.sha256
+          cd ../android && sha256sum -c nestra-viewer-android.zip.sha256
+      - name: Publish final ETAP 10 artifacts
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$REPO" --prerelease --title "NESTRA Remote v0.3.4 FINAL" --notes "ETAP 10 final branded artifacts. Engine run $WIN_RUN, Android viewer run $ANDROID_RUN."
+          fi
+          gh release upload "$TAG" -R "$REPO" --clobber             dist/windows/nestra-remote-engine-windows-x86.zip             dist/windows/nestra-remote-engine-windows-x86.zip.sha256             dist/android/nestra-viewer-android.zip             dist/android/nestra-viewer-android.zip.sha256
