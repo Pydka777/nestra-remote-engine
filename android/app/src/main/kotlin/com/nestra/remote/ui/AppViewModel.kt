@@ -174,13 +174,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val app = getApplication<Application>()
         fun newViewer() = RustDeskViewer(
             app.filesDir.absolutePath,
-            onSize = { w, h -> _state.update { it.copy(remoteWidth = w, remoteHeight = h) } },
-            onDisplays = { count -> _state.update { it.copy(displayCount = count.coerceAtLeast(1)) } },
-            onClipboard = { text ->
+            onSizeChanged = { w, h -> _state.update { it.copy(remoteWidth = w, remoteHeight = h) } },
+            onDisplaysChanged = { count -> _state.update { it.copy(displayCount = count.coerceAtLeast(1)) } },
+            onClipboardReceived = { text ->
                 val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("NESTRA Remote", text))
             },
-            onFileEvent = ::handleFileEvent,
+            onFileEventReceived = ::handleFileEvent,
         )
         fun transient(end: LiveSessionController.State, attempt: Int): Boolean = when (end) {
             is LiveSessionController.State.Ended -> end.reason in setOf("connection_error", "engine_closed", "engine_exited", "viewer_failed")

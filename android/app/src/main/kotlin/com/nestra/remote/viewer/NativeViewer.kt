@@ -48,10 +48,10 @@ object NativeViewer {
 /** RemoteViewer (core contract) implemented by the native RustDesk core. One instance per session. */
 class RustDeskViewer(
     private val appDir: String,
-    private val onSize: (Int, Int) -> Unit,
-    private val onDisplays: (Int) -> Unit,
-    private val onClipboard: (String) -> Unit,
-    private val onFileEvent: (String, String) -> Unit,
+    private val onSizeChanged: (Int, Int) -> Unit,
+    private val onDisplaysChanged: (Int) -> Unit,
+    private val onClipboardReceived: (String) -> Unit,
+    private val onFileEventReceived: (String, String) -> Unit,
 ) : RemoteViewer {
     private val handle = AtomicLong(0)
     @Volatile private var surface: Surface? = null
@@ -62,11 +62,11 @@ class RustDeskViewer(
         ViewerLog.i("nativeConnect: $target (grant not logged), surface ${if (surface != null) "ready" else "not yet"}")
         ViewerLog.i(SecretDiag.describe("android_jni_call", target.grant()))
         val h = NativeViewer.nativeConnect(target.engineId, target.rendezvousHost, target.serverKey, target.grant(), object : NativeViewer.Callback {
-            override fun onConnected(width: Int, height: Int) { ViewerLog.i("callback onConnected ${width}x$height"); onSize(width, height); events.onConnected() }
-            override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSize(width, height) }
-            override fun onDisplays(count: Int) { ViewerLog.i("callback onDisplays count=$count"); onDisplays(count.coerceAtLeast(1)) }
-            override fun onClipboard(text: String) { ViewerLog.i("callback onClipboard ${text.toByteArray().size} bytes"); onClipboard(text) }
-            override fun onFileEvent(name: String, json: String) { ViewerLog.i("callback onFileEvent $name"); onFileEvent(name, json) }
+            override fun onConnected(width: Int, height: Int) { ViewerLog.i("callback onConnected ${width}x$height"); onSizeChanged(width, height); events.onConnected() }
+            override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSizeChanged(width, height) }
+            override fun onDisplays(count: Int) { ViewerLog.i("callback onDisplays count=$count"); onDisplaysChanged(count.coerceAtLeast(1)) }
+            override fun onClipboard(text: String) { ViewerLog.i("callback onClipboard ${text.toByteArray().size} bytes"); onClipboardReceived(text) }
+            override fun onFileEvent(name: String, json: String) { ViewerLog.i("callback onFileEvent $name"); onFileEventReceived(name, json) }
             override fun onClosed(reason: String) { ViewerLog.w("callback onClosed($reason) from the native core"); events.onClosed(reason) }
         })
         ViewerLog.i(if (h != 0L) "nativeConnect ok (generation ${h and 0xFFFFL})" else "nativeConnect REFUSED (see the native line before)")
