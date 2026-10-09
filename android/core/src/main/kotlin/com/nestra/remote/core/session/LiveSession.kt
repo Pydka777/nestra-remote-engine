@@ -155,7 +155,26 @@ class LiveSessionController(
             val wait = (nextPoll - clock()).coerceAtLeast(0)
             when (val ev = events.poll(wait, TimeUnit.MILLISECONDS)) {
                 Ev.Connected -> if (!active) { active = true; set(State.Active(clock())) }
-                is Ev.Closed -> return end(sid, if (ev.reason.matches(Regex("^[a-z_]{1,32}$"))) ev.reason else "viewer_closed", tellViewer = false)
+                is Ev.Closed -> {
+                    val closeReason = if (ev.reason.matches(Regex("^[a-z_]{1,32}$"))) ev.reason else "viewer_closed"
+                    // A local PC-side DISCONNECT closes the native transport before the phone's next keepalive poll.
+                    // Resolve that race by asking the server once before treating a transport close as a retryable
+                    // network failure. If the server already has a terminal reason, preserve it and do NOT POST /end
+                    // as viewer_disconnect. On a genuine network loss this status call fails or still shows a live
+                    // session, so the existing reconnect path is unchanged.
+                    if (closeReason in setOf("connection_error", "engine_closed", "engine_exited")) {
+                        when (val st = api.sessionStatus(sid)) {
+                            is ApiResult.Ok -> if (st.value.state in setOf("ended", "expired", "refused")) {
+                                val reason = st.value.endReason ?: st.value.state
+                                log("viewer closed as $closeReason but server already says ${st.value.state} ($reason)")
+                                sessionId = null
+                                return final(State.Ended(reason))
+                            }
+                            else -> { /* network loss / live session: keep the existing end + reconnect behaviour */ }
+                        }
+                    }
+                    return end(sid, closeReason, tellViewer = false)
+                }
                 Ev.Disconnect -> return end(sid, "viewer_disconnect", tellViewer = true)
                 null -> {
                     nextPoll = clock() + if (active) keepaliveMs else pollMs

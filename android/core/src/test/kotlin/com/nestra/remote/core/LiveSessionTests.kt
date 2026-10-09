@@ -116,6 +116,23 @@ class LiveSessionTests {
         assertTrue(run.states.none { it.toString().contains(g) })
     }
 
+    @Test fun localPcDisconnectWinningTheTransportCloseRaceKeepsLocalDisconnectReason() {
+        val (b, s) = world()
+        val v = FakeViewer()
+        val run = Run(controller(s, v))
+        until("requested") { b.onlySession() != null }
+        val sid = b.onlySession()!!
+        b.pc(sid, "accepted")
+        until("viewer connect") { v.target != null }
+        v.events!!.onConnected()
+        until("active") { run.c.state is State.Active }
+        // Real RustDesk closes the transport at almost the same time the server records local_disconnect.
+        b.pc(sid, "ended", "local_disconnect")
+        v.events!!.onClosed("connection_error")
+        assertEquals(State.Ended("local_disconnect"), run.join())
+        assertTrue("phone must not overwrite the server's local_disconnect with viewer_disconnect", b.ends.isEmpty())
+    }
+
     @Test fun phoneDisconnectEndsOnTheServerAndClosesTheViewer() {
         val (b, s) = world()
         val v = FakeViewer()

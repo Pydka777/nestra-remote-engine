@@ -12,8 +12,8 @@ android {
         applicationId = "com.nestra.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.3.5"       // ETAP 10 RC: callback recursion crash fix + reconnect validation
+        versionCode = 17
+        versionName = "0.3.6"       // ETAP 10 RC2: preserve PC local disconnect over transport-close race
         buildConfigField("String", "PARENT_BASE_URL", "\"https://panel.nestraparent.com\"")
         buildConfigField("String", "REMOTE_BASE_URL", "\"https://remote.nestraparent.com\"")
         // AGPL-3.0 (the APK contains the RustDesk core): public Corresponding Source. Set before distributing any APK.
