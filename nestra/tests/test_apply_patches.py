@@ -131,7 +131,7 @@ check("FlutterHandler::nestra_token appended (android only, from the shared sess
       and fl.count("#[cfg(target_os = \"android\")]\nimpl FlutterHandler") == 1)
 check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs")))
 check("Windows engine brand assets replace upstream EXE/tray/raster artwork",
-      (d / "res" / "icon.ico").read_bytes() == (HERE / "assets" / "nestra-engine.ico").read_bytes()
+      (d / "res" / "icon.ico").read_bytes() == (HERE / "assets" / "nestra-tray.ico").read_bytes()
       and (d / "res" / "tray-icon.ico").read_bytes() == (HERE / "assets" / "nestra-tray.ico").read_bytes()
       and (d / "res" / "icon.png").read_bytes() == (HERE / "assets" / "icon.png").read_bytes())
 check("Connection Manager fallback avatar is branded instead of the generated coloured initial",

@@ -69,7 +69,7 @@ for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs"):
     shutil.copy(HERE / "src" / f, ROOT / "src" / f)
 # Brand all Windows engine surfaces: EXE icon, native tray icon and raster/UI artwork.
 for src_name, dst_name in (
-    ("nestra-engine.ico", "icon.ico"),
+    ("nestra-tray.ico", "icon.ico"),
     ("nestra-tray.ico", "tray-icon.ico"),
     ("icon.png", "icon.png"),
     ("32x32.png", "32x32.png"),
@@ -82,7 +82,7 @@ for src_name, dst_name in (
 
 # Connection Manager falls back to a generated coloured initial when no account avatar exists. Replace that
 # fallback with the NESTRA Engine artwork so a live owner session never shows the upstream-style purple 'N'.
-engine_avatar = base64.b64encode((HERE / "assets" / "128x128.png").read_bytes()).decode("ascii")
+engine_avatar = base64.b64encode((HERE / "assets" / "nestra-tray.png").read_bytes()).decode("ascii")
 edit("src/ui/cm.tis",
      '                    <div .icon style={"background: " + string2RGB(c.name, 1)}>\n'
      '                    {c.name[0].toUpperCase()}\n'
