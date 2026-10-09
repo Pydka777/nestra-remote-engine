@@ -1,6 +1,7 @@
 package com.nestra.remote.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,7 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -54,6 +57,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.nestra.remote.BuildConfig
+import com.nestra.remote.R
 import com.nestra.remote.core.api.RemoteDevice
 import com.nestra.remote.core.pairing.PairingInput
 import java.time.Duration
@@ -96,6 +100,13 @@ fun AppRoot(vm: AppViewModel) {
 
 @Composable private fun Brand(subtitle: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        Image(
+            painter = painterResource(R.drawable.nestra_remote_icon),
+            contentDescription = "NESTRA Remote",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(104.dp).clip(RoundedCornerShape(24.dp))
+        )
+        Spacer(Modifier.height(12.dp))
         Text("NESTRA", color = NrColors.Text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = 6.sp)
         Text("REMOTE", color = NrColors.Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 8.sp)
         Spacer(Modifier.height(8.dp))

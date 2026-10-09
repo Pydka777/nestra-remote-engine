@@ -64,9 +64,12 @@ def before(rel, anchor, addition):
 if "nestra_config" in (ROOT / "src" / "lib.rs").read_text(encoding="utf-8"):
     sys.exit("ALREADY PATCHED: start from a clean checkout of the pinned upstream commit")
 
-# ---------------------------------------------------------------------------------------------- new modules
+# ---------------------------------------------------------------------------------------------- new modules + Windows branding
 for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs"):
     shutil.copy(HERE / "src" / f, ROOT / "src" / f)
+# Upstream build.rs already embeds res/icon.ico into the Windows executable. Replace only that brand asset.
+shutil.copy(HERE / "assets" / "nestra-engine.ico", ROOT / "res" / "icon.ico")
+print("patched res/icon.ico (NESTRA Engine branding)")
 after("src/lib.rs", "mod custom_server;\n",
       "/// NESTRA Remote: fixed server/key and enforced settings\npub mod nestra_config;\n"
       "/// NESTRA Remote: --nestra-session (one-time session grant on stdin)\n#[cfg(windows)]\npub mod nestra_session;\n"

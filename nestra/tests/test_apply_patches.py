@@ -70,6 +70,8 @@ def tree():
     for rel, txt in FILES.items():
         (d / rel).parent.mkdir(parents=True, exist_ok=True)
         (d / rel).write_text(txt, encoding="utf-8")
+    (d / "res").mkdir(parents=True, exist_ok=True)
+    (d / "res" / "icon.ico").write_bytes(b"upstream-placeholder-icon")
     return d
 
 def run(d):
@@ -122,6 +124,8 @@ check("FlutterHandler::nestra_token appended (android only, from the shared sess
       fl.rstrip().endswith("}") and "impl FlutterHandler {\n    pub fn nestra_token(&self) -> usize {\n        Arc::as_ptr(&self.session_handlers)" in fl
       and fl.count("#[cfg(target_os = \"android\")]\nimpl FlutterHandler") == 1)
 check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs")))
+check("Windows engine brand icon replaces upstream res/icon.ico byte-for-byte",
+      (d / "res" / "icon.ico").read_bytes() == (HERE / "assets" / "nestra-engine.ico").read_bytes())
 viewer = R("src/nestra_viewer.rs")
 check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",
       "const ABI: jint = 3;" in viewer
