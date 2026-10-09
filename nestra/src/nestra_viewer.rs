@@ -677,7 +677,13 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeToggleAu
 pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeReadRemoteDir(mut env: JNIEnv, _c: JClass, h: jlong, path: JString) {
     let Ok(path) = env.get_string(&path) else { return };
     let path: String = path.into();
-    with_session(h, |s| s.read_remote_dir(path, false));
+    let safe_path = if path.is_empty() { "<PC home>" } else { "<selected directory>" };
+    info(&format!("file directory request: {safe_path}"));
+    if with_session(h, |s| s.read_remote_dir(path, false)) {
+        info("file directory request handed to RustDesk session");
+    } else {
+        warn("file directory request rejected: no active native session");
+    }
 }
 
 #[no_mangle]
