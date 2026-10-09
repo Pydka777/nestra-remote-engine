@@ -130,6 +130,10 @@ check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",
 check("multi-monitor renderer follows the selected display, not hard-coded display 0",
       "current_display: usize" in viewer and "display != v.current_display" in viewer
       and "v.current_display = display as usize;" in viewer)
+check("display-count callback is edge-triggered, not repeated for identical sync_peer_info events",
+      "display_count: usize" in viewer
+      and "v.display_count != count" in viewer
+      and "display list changed" in viewer)
 check("stale JNI handles cannot act on a newer session or fake a file-transfer start",
       "filter(|v| v.gen == gen && !v.closing)" in viewer
       and "if !with_session(h, |s| s.send_files" in viewer

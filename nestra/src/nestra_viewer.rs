@@ -136,6 +136,7 @@ struct Viewer {
     vm: usize, // *mut jni::sys::JavaVM
     size: (usize, usize),
     current_display: usize,
+    display_count: usize, // last count delivered to Android; suppress duplicate sync_peer_info storms
     connected: bool, // first frame drawn
     logged_in: bool, // peer_info received (the PC accepted the grant)
     closing: bool,   // the app asked to close: no onClosed callback
@@ -354,9 +355,16 @@ pub fn on_event(token: usize, json: &str) {
             info(&format!("peer_info: gen {gen} logged in (grant accepted by the PC); requesting display 0 once"));
             let displays = field(&e, "displays");
             if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(displays) {
-                let count = list.len().max(1) as jint;
-                if let Some((vm, cb)) = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone())) {
-                    callback(vm, &cb, "onDisplays", "(I)V", &[JValue::Int(count)]);
+                let count = list.len().max(1);
+                let target = {
+                    let mut lock = VIEWER.lock().unwrap();
+                    lock.as_mut().filter(|v| v.gen == gen).map(|v| {
+                        v.display_count = count;
+                        (v.vm, v.cb.clone())
+                    })
+                };
+                if let Some((vm, cb)) = target {
+                    callback(vm, &cb, "onDisplays", "(I)V", &[JValue::Int(count as jint)]);
                 }
                 info(&format!("initial display list: {count} display(s)"));
             }
@@ -370,12 +378,21 @@ pub fn on_event(token: usize, json: &str) {
         "sync_peer_info" => {
             let displays = field(&e, "displays");
             if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(displays) {
-                let count = list.len().max(1) as jint;
-                let target = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone()));
+                let count = list.len().max(1);
+                let target = {
+                    let mut lock = VIEWER.lock().unwrap();
+                    match lock.as_mut().filter(|v| v.gen == gen) {
+                        Some(v) if v.display_count != count => {
+                            v.display_count = count;
+                            Some((v.vm, v.cb.clone()))
+                        }
+                        _ => None,
+                    }
+                };
                 if let Some((vm, cb)) = target {
-                    callback(vm, &cb, "onDisplays", "(I)V", &[JValue::Int(count)]);
+                    callback(vm, &cb, "onDisplays", "(I)V", &[JValue::Int(count as jint)]);
+                    info(&format!("display list changed: {count} display(s)"));
                 }
-                info(&format!("display list updated: {count} display(s)"));
             }
         }
         "clipboard" => {
@@ -540,6 +557,7 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeConnect(
         vm,
         size: (0, 0),
         current_display: 0,
+        display_count: 0,
         connected: false,
         logged_in: false,
         closing: false,
