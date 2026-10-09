@@ -1,0 +1,37 @@
+name: publish-v032-native
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/publish-v032-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: v0.3.2-native
+      ANDROID_RUN: "37902184899"
+    steps:
+      - name: Download verified Android viewer artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android
+          gh run download "$ANDROID_RUN" -R "$REPO" -n nestra-viewer-android -D dist/android
+          test -f dist/android/nestra-viewer-android.zip
+          test -f dist/android/nestra-viewer-android.zip.sha256
+          cd dist/android
+          sha256sum -c nestra-viewer-android.zip.sha256
+      - name: Publish prerelease artifact
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$REPO" --prerelease --title "NESTRA Remote v0.3.2 native" --notes "Android JNI artifact from successful run 37902184899."
+          fi
+          gh release upload "$TAG" -R "$REPO" --clobber             dist/android/nestra-viewer-android.zip             dist/android/nestra-viewer-android.zip.sha256
