@@ -24,7 +24,7 @@ Changes (all listed in CHANGES-FROM-UPSTREAM.md, AGPL section 5a):
   src/flutter.rs            Android viewer hooks: frames -> Surface (nestra_viewer::on_frame), events -> on_event,
                             both with the handler's owner token (FlutterHandler::nestra_token, appended)
 """
-import pathlib, shutil, sys
+import base64, pathlib, shutil, sys
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
 HERE = pathlib.Path(__file__).resolve().parent
@@ -67,9 +67,31 @@ if "nestra_config" in (ROOT / "src" / "lib.rs").read_text(encoding="utf-8"):
 # ---------------------------------------------------------------------------------------------- new modules + Windows branding
 for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs"):
     shutil.copy(HERE / "src" / f, ROOT / "src" / f)
-# Upstream build.rs already embeds res/icon.ico into the Windows executable. Replace only that brand asset.
-shutil.copy(HERE / "assets" / "nestra-engine.ico", ROOT / "res" / "icon.ico")
-print("patched res/icon.ico (NESTRA Engine branding)")
+# Brand all Windows engine surfaces: EXE icon, native tray icon and raster/UI artwork.
+for src_name, dst_name in (
+    ("nestra-engine.ico", "icon.ico"),
+    ("nestra-tray.ico", "tray-icon.ico"),
+    ("icon.png", "icon.png"),
+    ("32x32.png", "32x32.png"),
+    ("64x64.png", "64x64.png"),
+    ("128x128.png", "128x128.png"),
+    ("128x128@2x.png", "128x128@2x.png"),
+):
+    shutil.copy(HERE / "assets" / src_name, ROOT / "res" / dst_name)
+    print(f"patched res/{dst_name} (NESTRA branding)")
+
+# Connection Manager falls back to a generated coloured initial when no account avatar exists. Replace that
+# fallback with the NESTRA Engine artwork so a live owner session never shows the upstream-style purple 'N'.
+engine_avatar = base64.b64encode((HERE / "assets" / "128x128.png").read_bytes()).decode("ascii")
+edit("src/ui/cm.tis",
+     '                    {c.avatar ?\n'
+     '                    <img .icon src={c.avatar} /> :\n'
+     '                    <div .icon style={"background: " + string2RGB(c.name, 1)}>\n'
+     '                    {c.name[0].toUpperCase()}\n'
+     '                    </div>}\n',
+     '                    {c.avatar ?\n'
+     '                    <img .icon src={c.avatar} /> :\n'
+     f'                    <img .icon src="data:image/png;base64,{engine_avatar}" />}\n')
 after("src/lib.rs", "mod custom_server;\n",
       "/// NESTRA Remote: fixed server/key and enforced settings\npub mod nestra_config;\n"
       "/// NESTRA Remote: --nestra-session (one-time session grant on stdin)\n#[cfg(windows)]\npub mod nestra_session;\n"

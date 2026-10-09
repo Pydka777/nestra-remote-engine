@@ -52,6 +52,12 @@ FILES = {
         '    let mut password = lc.read().unwrap().password.clone();\n'
         '    // preset password\n'
         '    if password.is_empty() {\n',
+    "src/ui/cm.tis":
+        '                    {c.avatar ?\n'
+        '                    <img .icon src={c.avatar} /> :\n'
+        '                    <div .icon style={"background: " + string2RGB(c.name, 1)}>\n'
+        '                    {c.name[0].toUpperCase()}\n'
+        '                    </div>}\n',
     "src/flutter.rs":
         'pub struct FlutterHandler {\n'
         '    // ui session id -> display handler data\n'
@@ -124,8 +130,13 @@ check("FlutterHandler::nestra_token appended (android only, from the shared sess
       fl.rstrip().endswith("}") and "impl FlutterHandler {\n    pub fn nestra_token(&self) -> usize {\n        Arc::as_ptr(&self.session_handlers)" in fl
       and fl.count("#[cfg(target_os = \"android\")]\nimpl FlutterHandler") == 1)
 check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs")))
-check("Windows engine brand icon replaces upstream res/icon.ico byte-for-byte",
-      (d / "res" / "icon.ico").read_bytes() == (HERE / "assets" / "nestra-engine.ico").read_bytes())
+check("Windows engine brand assets replace upstream EXE/tray/raster artwork",
+      (d / "res" / "icon.ico").read_bytes() == (HERE / "assets" / "nestra-engine.ico").read_bytes()
+      and (d / "res" / "tray-icon.ico").read_bytes() == (HERE / "assets" / "nestra-tray.ico").read_bytes()
+      and (d / "res" / "icon.png").read_bytes() == (HERE / "assets" / "icon.png").read_bytes())
+check("Connection Manager fallback avatar is branded instead of the generated coloured initial",
+      'data:image/png;base64,' in R("src/ui/cm.tis")
+      and 'string2RGB(c.name, 1)' not in R("src/ui/cm.tis"))
 viewer = R("src/nestra_viewer.rs")
 check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",
       "const ABI: jint = 3;" in viewer
