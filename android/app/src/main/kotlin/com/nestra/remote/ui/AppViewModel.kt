@@ -4,8 +4,11 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContentValues
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,6 +20,9 @@ import com.nestra.remote.core.pairing.PairingInput
 import com.nestra.remote.core.session.LiveSessionController
 import com.nestra.remote.core.session.LiveSessionText
 import com.nestra.remote.core.session.RemoteSession
+import com.nestra.remote.core.session.FileEvent
+import com.nestra.remote.core.session.RemoteEntry
+import com.nestra.remote.core.session.RemoteFiles
 import com.nestra.remote.viewer.NativeViewer
 import com.nestra.remote.viewer.RustDeskViewer
 import com.nestra.remote.viewer.ViewerLog
@@ -27,13 +33,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.io.File
 
-data class RemoteFileEntry(val name: String, val entryType: Int, val size: Long) {
-    val isDirectory: Boolean get() = entryType < 3
-    val isDrive: Boolean get() = entryType == 3
-}
+typealias RemoteFileEntry = RemoteEntry
+
+/** The running file transfer as the panel shows it (one at a time). */
+data class FileTransferUi(val id: Int, val name: String, val upload: Boolean, val percent: Int, val text: String)
 
 sealed interface Screen {
     data object Splash : Screen
@@ -64,6 +69,7 @@ data class UiState(
     val remotePath: String = "",
     val remoteFiles: List<RemoteFileEntry> = emptyList(),
     val fileStatus: String? = null,
+    val transfer: FileTransferUi? = null,
 )
 
 /**
@@ -194,7 +200,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         reconnectCancelled = false
         connectLoopActive = true
         ViewerLog.i("Connect tapped (app ${com.nestra.remote.BuildConfig.VERSION_NAME}); native viewer ABI ${NativeViewer.ABI}")
-        _state.update { it.copy(screen = Screen.Session(deviceId), session = LiveSessionController.State.Requesting, message = null, remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
+        transfers.clear()
+        _state.update { it.copy(screen = Screen.Session(deviceId), session = LiveSessionController.State.Requesting, message = null, remoteWidth = 0, remoteHeight = 0, displayCount = 1, remotePath = "", remoteFiles = emptyList(), fileStatus = null, transfer = null) }
         viewModelScope.launch(Dispatchers.IO) {
             var end: LiveSessionController.State
             var reconnectAttempt = 0
@@ -219,7 +226,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             withContext(Dispatchers.Main) {
                 controller = null; viewer = null; connectLoopActive = false
-                _state.update { it.copy(session = null, screen = Screen.DeviceDetails(deviceId), remoteWidth = 0, remoteHeight = 0, displayCount = 1) }
+                // a session end also ends its file connection: unfinished transfers are dropped (partial files removed)
+                transfers.values.forEach { it.local.delete() }; transfers.clear()
+                _state.update { it.copy(session = null, screen = Screen.DeviceDetails(deviceId), remoteWidth = 0, remoteHeight = 0, displayCount = 1, remotePath = "", remoteFiles = emptyList(), fileStatus = null, transfer = null) }
                 say(when (end) {
                     is LiveSessionController.State.Refused -> LiveSessionText.refusal(end.why, end.detail)
                     is LiveSessionController.State.Ended -> endText(end.reason)
@@ -230,44 +239,79 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------------------------------ v0.4.0 file browser + transfer
+    // Every file operation runs on the native FILE_TRANSFER connection (nestra_files.rs). Logs carry event names and
+    // job ids only: never file names, paths or contents.
+
+    private class PendingTransfer(val name: String, val upload: Boolean, val local: File)
+    private val transfers = java.util.concurrent.ConcurrentHashMap<Int, PendingTransfer>()
+    private var fileListRequestId = 0
+    private val loadingText = "Loading files…"
+
     private fun handleFileEvent(name: String, json: String) {
-        try {
-            val outer = JSONObject(json)
-            when (name) {
-                "file_dir" -> {
-                    val inner = JSONObject(outer.optString("value", "{}"))
-                    val entries = inner.optJSONArray("entries")
-                    val files = buildList {
-                        if (entries != null) for (i in 0 until entries.length()) {
-                            val e = entries.optJSONObject(i) ?: continue
-                            add(RemoteFileEntry(e.optString("name"), e.optInt("entry_type", 4), e.optLong("size", 0)))
-                        }
-                    }.sortedWith(compareBy<RemoteFileEntry> { !(it.isDirectory || it.isDrive) }.thenBy { it.name.lowercase() })
-                    _state.update { it.copy(remotePath = inner.optString("path", it.remotePath), remoteFiles = files, fileStatus = null) }
-                }
-                "job_progress" -> _state.update { it.copy(fileStatus = "Transferring file…") }
-                "job_done" -> _state.update { it.copy(fileStatus = "File transfer finished.") }
-                "job_error" -> _state.update { it.copy(fileStatus = "File transfer failed.") }
+        when (val ev = RemoteFiles.parse(name, json)) {
+            is FileEvent.Dir -> {
+                fileListRequestId++   // answered: no timeout message
+                _state.update { it.copy(remotePath = ev.listing.path, remoteFiles = ev.listing.entries, fileStatus = if (ev.listing.entries.isEmpty()) "This folder is empty." else if (it.transfer != null) it.fileStatus else null) }
             }
-        } catch (e: Exception) {
-            ViewerLog.w("file event parse failed: ${e.javaClass.simpleName}")
+            is FileEvent.Error -> {
+                ViewerLog.w("file_error op=${ev.op}")
+                if (ev.op != "transfer") fileListRequestId++
+                val text = when (ev.op) {
+                    "dir" -> "Could not open this folder: ${ev.message}"
+                    "session" -> "File connection to the PC failed: ${ev.message}. Tap Refresh to retry."
+                    else -> "Transfer could not start: ${ev.message}"
+                }
+                _state.update { it.copy(fileStatus = text) }
+            }
+            is FileEvent.Progress -> {
+                val t = transfers[ev.id] ?: return
+                val text = RemoteFiles.progressText(if (t.upload) "Uploading" else "Downloading", t.name, ev)
+                _state.update { it.copy(transfer = FileTransferUi(ev.id, t.name, t.upload, ev.percent, text), fileStatus = null) }
+            }
+            is FileEvent.Done -> {
+                val t = transfers.remove(ev.id) ?: return
+                ViewerLog.i("file job ${ev.id} done (${if (t.upload) "upload" else "download"})")
+                viewModelScope.launch(Dispatchers.IO) {
+                    val text = if (t.upload) {
+                        t.local.delete()                                  // the private cache copy
+                        "Uploaded ${t.name} to ${RemoteFiles.title(_state.value.remotePath)}."
+                    } else {
+                        val where = exportToDownloads(t.local, t.name)
+                        if (where != null) "Downloaded ${t.name} to $where." else "Downloaded ${t.name} to NESTRA Remote's app folder (${t.local.parentFile?.absolutePath})."
+                    }
+                    _state.update { it.copy(transfer = null, fileStatus = text) }
+                    if (t.upload) withContext(Dispatchers.Main) { refreshListing() }
+                }
+            }
+            is FileEvent.JobError -> {
+                val t = transfers.remove(ev.id) ?: return
+                ViewerLog.w("file job ${ev.id} ended: ${if (ev.cancelled) "cancelled" else "error"}")
+                viewModelScope.launch(Dispatchers.IO) { t.local.delete() }   // partial download or upload cache copy
+                _state.update {
+                    it.copy(transfer = null, fileStatus = if (ev.cancelled) "Transfer of ${t.name} cancelled." else "Transfer of ${t.name} failed: ${ev.message}")
+                }
+            }
+            FileEvent.Ignored -> {}
         }
     }
 
-    private var fileListRequestId = 0
+    private fun refreshListing() { openRemoteFiles(_state.value.remotePath) }
 
+    /** "" = PC home, "/" = the PC's drives, otherwise an absolute folder from a listing. */
     fun openRemoteFiles(path: String = "") {
         val requestId = ++fileListRequestId
-        _state.update { it.copy(fileStatus = "Loading files…") }
-        if (viewer == null) {
+        val v = viewer
+        if (v == null) {
             _state.update { it.copy(fileStatus = "File browser unavailable: session is not active.") }
             return
         }
-        viewer?.readRemoteDir(path)
+        _state.update { it.copy(fileStatus = loadingText) }
+        v.readRemoteDir(path)
         viewModelScope.launch {
-            delay(10_000)
-            if (requestId == fileListRequestId && _state.value.fileStatus == "Loading files…") {
-                _state.update { it.copy(fileStatus = "No response from PC file browser. Tap Refresh to retry.") }
+            delay(30_000)   // the first request also opens the file connection to the PC
+            if (requestId == fileListRequestId && _state.value.fileStatus == loadingText) {
+                _state.update { it.copy(fileStatus = "No response from the PC file browser. Tap Refresh to retry.") }
                 ViewerLog.w("remote file listing timed out")
             }
         }
@@ -275,68 +319,104 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openRemoteEntry(entry: RemoteFileEntry) {
         if (!(entry.isDirectory || entry.isDrive)) return
-        val base = _state.value.remotePath
-        val next = when {
-            entry.isDrive -> if (entry.name.endsWith("\\")) entry.name else "${entry.name}\\"
-            base.isBlank() || base == "/" -> entry.name
-            base.endsWith("\\") || base.endsWith("/") -> base + entry.name
-            else -> "$base\\${entry.name}"
-        }
-        openRemoteFiles(next)
+        openRemoteFiles(RemoteFiles.child(_state.value.remotePath, entry))
     }
 
-    fun remoteFilesUp() {
-        val p = _state.value.remotePath.trimEnd('\\', '/')
-        if (p.length <= 3 || p.isBlank()) { openRemoteFiles("/"); return }
-        val cut = maxOf(p.lastIndexOf('\\'), p.lastIndexOf('/'))
-        openRemoteFiles(if (cut <= 2) p.take(3) else p.substring(0, cut))
-    }
+    fun remoteFilesUp() = openRemoteFiles(RemoteFiles.parent(_state.value.remotePath))
 
-    private fun uniqueName(name: String, existing: Set<String>): String {
-        if (name !in existing) return name
-        val dot = name.lastIndexOf('.')
-        val stem = if (dot > 0) name.substring(0, dot) else name
-        val ext = if (dot > 0) name.substring(dot) else ""
-        for (i in 2..999) {
-            val candidate = "$stem ($i)$ext"
-            if (candidate !in existing) return candidate
-        }
-        return "$stem-${System.currentTimeMillis()}$ext"
+    fun remoteDrives() = openRemoteFiles("/")
+
+    private fun busyWithTransfer(): Boolean {
+        if (_state.value.transfer == null && transfers.isEmpty()) return false
+        _state.update { it.copy(fileStatus = "Wait for the current transfer to finish, or cancel it.") }
+        return true
     }
 
     fun uploadUri(uri: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        if (busyWithTransfer()) return@launch
+        val base = _state.value.remotePath
+        if (base.isEmpty() || base == "/") {
+            _state.update { it.copy(fileStatus = "Open a folder on the PC first, then upload into it.") }
+            return@launch
+        }
         val app = getApplication<Application>()
         val resolver = app.contentResolver
         var name = "upload-${System.currentTimeMillis()}"
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) name = c.getString(0)?.takeIf { it.isNotBlank() } ?: name
         }
-        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val remoteName = uniqueName(safe, _state.value.remoteFiles.map { it.name }.toSet())
-        val local = File(app.cacheDir, "nestra-upload-${System.currentTimeMillis()}-$safe")
-        resolver.openInputStream(uri)?.use { input -> local.outputStream().use { input.copyTo(it) } } ?: return@launch
-        val base = _state.value.remotePath
-        val remote = when {
-            base.isBlank() || base == "/" -> remoteName
-            base.endsWith("\\") -> base + remoteName
-            else -> "$base\\$remoteName"
+        val remoteName = RemoteFiles.safeName(name, _state.value.remoteFiles.map { it.name }.toSet())
+        val local = File(app.cacheDir, "nestra-upload-${System.currentTimeMillis()}")
+        _state.update { it.copy(fileStatus = "Preparing $remoteName…") }
+        val copied = try {
+            resolver.openInputStream(uri)?.use { input -> local.outputStream().use { input.copyTo(it) } } != null
+        } catch (e: java.io.IOException) { false }
+        if (!copied) {
+            local.delete()
+            _state.update { it.copy(fileStatus = "Could not read the selected file.") }
+            return@launch
         }
+        val remote = if (base.endsWith("\") || base.endsWith("/")) base + remoteName else "$base\$remoteName"
         val id = viewer?.transferFile(local.absolutePath, remote, false) ?: -1
-        _state.update { it.copy(fileStatus = if (id >= 0) "Uploading $remoteName…" else "Upload could not start.") }
+        if (id >= 0) {
+            transfers[id] = PendingTransfer(remoteName, true, local)
+            _state.update { it.copy(transfer = FileTransferUi(id, remoteName, true, 0, "Uploading $remoteName…"), fileStatus = null) }
+        } else {
+            local.delete()
+            _state.update { it.copy(fileStatus = it.fileStatus?.takeIf { s -> s.startsWith("Transfer could not start") } ?: "Upload could not start.") }
+        }
     }
 
     fun downloadRemoteFile(entry: RemoteFileEntry) {
-        if (entry.isDirectory || entry.isDrive) return
+        if (!entry.isFile || busyWithTransfer()) return
         val app = getApplication<Application>()
         val base = _state.value.remotePath
-        val remote = if (base.endsWith("\\")) base + entry.name else "$base\\${entry.name}"
-        val dir = app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: app.filesDir
-        dir.mkdirs()
-        val safe = entry.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val localName = uniqueName(safe, dir.list()?.toSet() ?: emptySet())
-        val local = File(dir, localName)
+        val remote = if (base.endsWith("\") || base.endsWith("/")) base + entry.name else "$base\${entry.name}"
+        // received into this app's own folder first (the only place the native core writes), then exported
+        val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "incoming").apply { mkdirs() }
+        val localName = RemoteFiles.safeName(entry.name)
+        val local = File(dir, "nestra-download-${System.currentTimeMillis()}")
         val id = viewer?.transferFile(remote, local.absolutePath, true) ?: -1
-        _state.update { it.copy(fileStatus = if (id >= 0) "Downloading $localName…" else "Download could not start.") }
+        if (id >= 0) {
+            transfers[id] = PendingTransfer(localName, false, local)
+            _state.update { it.copy(transfer = FileTransferUi(id, localName, false, 0, "Downloading $localName…"), fileStatus = null) }
+        } else {
+            _state.update { it.copy(fileStatus = it.fileStatus?.takeIf { s -> s.startsWith("Transfer could not start") } ?: "Download could not start.") }
+        }
+    }
+
+    fun cancelTransfer() {
+        val t = _state.value.transfer ?: return
+        viewer?.cancelFileJob(t.id)
+        _state.update { it.copy(fileStatus = "Cancelling…") }
+    }
+
+    /**
+     * Android 10+: copies a finished download to the public Download/NESTRA folder (MediaStore, no storage permission)
+     * and removes the private copy. Returns where it went, or null (the file then stays in the app folder).
+     */
+    private fun exportToDownloads(src: File, name: String): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val resolver = getApplication<Application>().contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/NESTRA")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+        return try {
+            resolver.openOutputStream(uri)?.use { out -> src.inputStream().use { it.copyTo(out) } } ?: throw java.io.IOException("no stream")
+            resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            val shown = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            } ?: name
+            src.delete()
+            "Download/NESTRA/$shown"
+        } catch (e: Exception) {
+            ViewerLog.w("download export failed: ${e.javaClass.simpleName}")
+            resolver.delete(uri, null, null)
+            null
+        }
     }
 
     /** Disconnect on the phone: the DISCONNECT button or Back on the session screen ([source] is logged). */

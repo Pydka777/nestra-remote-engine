@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -63,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nestra.remote.core.session.LiveSessionController.State
+import com.nestra.remote.core.session.RemoteFiles
 import com.nestra.remote.ui.AppViewModel
 import com.nestra.remote.ui.UiState
 
@@ -343,13 +345,28 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         .background(Color(0xEE16191D))
                         .padding(12.dp)
                 ) {
-                    Text("FILES · ${s.remotePath.ifBlank { "PC home" }}", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("FILES · ${RemoteFiles.title(s.remotePath)}", color = Color.White, fontWeight = FontWeight.Bold, maxLines = 2)
                     Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedButton(onClick = { vm.remoteFilesUp() }) { Text("Up", color = Color.White) }
-                        OutlinedButton(onClick = { uploadPicker.launch(arrayOf("*/*")) }, modifier = Modifier.padding(start = 6.dp)) { Text("Upload", color = Color.White) }
+                        OutlinedButton(onClick = { vm.remoteDrives() }, modifier = Modifier.padding(start = 6.dp)) { Text("Drives", color = Color.White) }
+                        OutlinedButton(
+                            onClick = { uploadPicker.launch(arrayOf("*/*")) },
+                            enabled = s.transfer == null && s.remotePath.isNotEmpty() && s.remotePath != "/",
+                            modifier = Modifier.padding(start = 6.dp)
+                        ) { Text("Upload", color = Color.White) }
                         OutlinedButton(onClick = { vm.openRemoteFiles(s.remotePath) }, modifier = Modifier.padding(start = 6.dp)) { Text("Refresh", color = Color.White) }
                         Box(Modifier.weight(1f))
                         OutlinedButton(onClick = { filesVisible = false }) { Text("Close", color = Color.White) }
+                    }
+                    s.transfer?.let { t ->
+                        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            Text(t.text, color = Color.White, fontSize = 12.sp, maxLines = 2)
+                            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (t.percent >= 0) LinearProgressIndicator(progress = { t.percent / 100f }, modifier = Modifier.weight(1f))
+                                else LinearProgressIndicator(modifier = Modifier.weight(1f))
+                                OutlinedButton(onClick = { vm.cancelTransfer() }, modifier = Modifier.padding(start = 8.dp)) { Text("Cancel", color = Color.White) }
+                            }
+                        }
                     }
                     s.fileStatus?.let { Text(it, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
                     LazyColumn(Modifier.fillMaxWidth().weight(1f).padding(top = 6.dp)) {
@@ -360,13 +377,13 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                                 }.padding(vertical = 8.dp, horizontal = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(if (entry.isDirectory || entry.isDrive) "📁" else "📄", fontSize = 18.sp)
-                                Text(entry.name, color = Color.White, modifier = Modifier.padding(start = 8.dp).weight(1f))
-                                if (!(entry.isDirectory || entry.isDrive)) Text("${entry.size} B", color = Color.LightGray, fontSize = 11.sp)
+                                Text(if (entry.isDrive) "💽" else if (entry.isDirectory) "📁" else "📄", fontSize = 18.sp)
+                                Text(entry.name, color = Color.White, maxLines = 2, modifier = Modifier.padding(start = 8.dp).weight(1f))
+                                if (entry.isFile) Text(RemoteFiles.formatBytes(entry.size), color = Color.LightGray, fontSize = 11.sp)
                             }
                         }
                     }
-                    Text("Tap a folder to open it. Tap a file to download it to NESTRA Remote/Downloads.", color = Color.LightGray, fontSize = 11.sp)
+                    Text("Tap a folder to open it. Tap a file to download it to Download/NESTRA. Upload sends a phone file into this PC folder (never overwrites).", color = Color.LightGray, fontSize = 11.sp)
                 }
             }
             if (st is State.Active && !keyboard && !filesVisible) {

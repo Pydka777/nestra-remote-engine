@@ -39,6 +39,8 @@ object NativeViewer {
     @JvmStatic external fun nativeToggleAudio(handle: Long)
     @JvmStatic external fun nativeReadRemoteDir(handle: Long, path: String)
     @JvmStatic external fun nativeTransferFile(handle: Long, from: String, to: String, remoteToLocal: Boolean): Int
+    /** v0.4.0: cancels a running file job (the native core reports job_error with "cancelled":true). */
+    @JvmStatic external fun nativeCancelFileJob(handle: Long, id: Int)
     @JvmStatic external fun nativeClose(handle: Long)
 
     const val MOVE = 0; const val DOWN = 1; const val UP = 2; const val WHEEL = 3
@@ -66,7 +68,7 @@ class RustDeskViewer(
             override fun onResolution(width: Int, height: Int) { ViewerLog.i("callback onResolution ${width}x$height"); onSizeChanged(width, height) }
             override fun onDisplays(count: Int) { ViewerLog.i("callback onDisplays count=$count"); onDisplaysChanged(count.coerceAtLeast(1)) }
             override fun onClipboard(text: String) { ViewerLog.i("callback onClipboard ${text.toByteArray().size} bytes"); onClipboardReceived(text) }
-            override fun onFileEvent(name: String, json: String) { ViewerLog.i("callback onFileEvent $name"); onFileEventReceived(name, json) }
+            override fun onFileEvent(name: String, json: String) { if (name != "job_progress") ViewerLog.i("callback onFileEvent $name"); onFileEventReceived(name, json) }
             override fun onClosed(reason: String) { ViewerLog.w("callback onClosed($reason) from the native core"); events.onClosed(reason) }
         })
         ViewerLog.i(if (h != 0L) "nativeConnect ok (generation ${h and 0xFFFFL})" else "nativeConnect REFUSED (see the native line before)")
@@ -97,5 +99,6 @@ class RustDeskViewer(
     fun sendClipboard(text: String) { if (text.isNotEmpty()) handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeSendClipboard(it, text) } }
     fun toggleAudio() { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeToggleAudio(it) } }
     fun readRemoteDir(path: String) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeReadRemoteDir(it, path) } }
+    fun cancelFileJob(id: Int) { handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeCancelFileJob(it, id) } }
     fun transferFile(from: String, to: String, remoteToLocal: Boolean): Int = handle.get().takeIf { it != 0L }?.let { NativeViewer.nativeTransferFile(it, from, to, remoteToLocal) } ?: -1
 }

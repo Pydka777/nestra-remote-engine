@@ -12,8 +12,8 @@ android {
         applicationId = "com.nestra.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.3.9"       // ETAP 10 RC2: preserve PC local disconnect over transport-close race
+        versionCode = 22
+        versionName = "0.4.0-rc1"   // final "0.4.0" only after the physical Xiaomi <-> Windows test is GREEN; file browser + transfer over a FILE_TRANSFER companion connection (progress, cancel, errors)
         buildConfigField("String", "PARENT_BASE_URL", "\"https://panel.nestraparent.com\"")
         buildConfigField("String", "REMOTE_BASE_URL", "\"https://remote.nestraparent.com\"")
         // AGPL-3.0 (the APK contains the RustDesk core): public Corresponding Source. Set before distributing any APK.
