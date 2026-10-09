@@ -369,6 +369,13 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                     Text("Tap a folder to open it. Tap a file to download it to NESTRA Remote/Downloads.", color = Color.LightGray, fontSize = 11.sp)
                 }
             }
+            if (st is State.Active && !keyboard && !filesVisible) {
+                Button(
+                    onClick = { keyboard = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xAA20242A)),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp)
+                ) { Text("⌨", color = Color.White, fontSize = 20.sp) }
+            }
             if (st !is State.Active) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(36.dp), color = Color.White)
                 Text(when (st) {
@@ -378,39 +385,54 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                     else -> ""
                 }, color = Color.White, modifier = Modifier.padding(top = 12.dp))
             }
-            if (keyboard && st is State.Active) KeyboardInput(vm, Modifier.align(Alignment.BottomCenter))
+            if (keyboard && st is State.Active) KeyboardInput(
+                vm = vm,
+                onClose = { keyboard = false },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 }
 
 /** Hidden text field: typed text goes to the PC as text; Backspace / Enter / arrows as keys. Nothing is stored. */
 @Composable
-private fun KeyboardInput(vm: AppViewModel, modifier: Modifier) {
+private fun KeyboardInput(vm: AppViewModel, onClose: () -> Unit, modifier: Modifier) {
     val focus = remember { FocusRequester() }
     val kb = LocalSoftwareKeyboardController.current
     val sentinel = " "
     var value by remember { mutableStateOf(TextFieldValue(sentinel, TextRange(1))) }
-    BasicTextField(
-        value = value,
-        onValueChange = { nv ->
-            val v = vm.viewer
-            when {
-                nv.text.isEmpty() -> v?.let { it.key(KeyEvent.KEYCODE_DEL, true); it.key(KeyEvent.KEYCODE_DEL, false) }
-                nv.text.length > 1 -> v?.let {
-                    it.text(nv.text.substring(1).replace("\n", ""))
-                    if (nv.text.contains('\n')) { it.key(KeyEvent.KEYCODE_ENTER, true); it.key(KeyEvent.KEYCODE_ENTER, false) }
+
+    Box(modifier.fillMaxWidth()) {
+        // Always-visible close control sits immediately above the Android IME, so closing the keyboard never
+        // requires reopening the red session toolbar.
+        Button(
+            onClick = { kb?.hide(); onClose() },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xDD20242A)),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+        ) { Text("✕ Keyboard", color = Color.White) }
+
+        BasicTextField(
+            value = value,
+            onValueChange = { nv ->
+                val v = vm.viewer
+                when {
+                    nv.text.isEmpty() -> v?.let { it.key(KeyEvent.KEYCODE_DEL, true); it.key(KeyEvent.KEYCODE_DEL, false) }
+                    nv.text.length > 1 -> v?.let {
+                        it.text(nv.text.substring(1).replace("\n", ""))
+                        if (nv.text.contains('\n')) { it.key(KeyEvent.KEYCODE_ENTER, true); it.key(KeyEvent.KEYCODE_ENTER, false) }
+                    }
                 }
-            }
-            value = TextFieldValue(sentinel, TextRange(1))
-        },
-        modifier = modifier.size(1.dp).focusRequester(focus).onKeyEvent { e ->
-            val n = e.nativeKeyEvent
-            if (n.keyCode in listOf(KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_TAB)) {
-                vm.viewer?.key(n.keyCode, n.action == KeyEvent.ACTION_DOWN); true
-            } else false
-        },
-    )
+                value = TextFieldValue(sentinel, TextRange(1))
+            },
+            modifier = Modifier.size(1.dp).align(Alignment.BottomStart).focusRequester(focus).onKeyEvent { e ->
+                val n = e.nativeKeyEvent
+                if (n.keyCode in listOf(KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_TAB)) {
+                    vm.viewer?.key(n.keyCode, n.action == KeyEvent.ACTION_DOWN); true
+                } else false
+            },
+        )
+    }
     androidx.compose.runtime.LaunchedEffect(Unit) { focus.requestFocus(); kb?.show() }
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { kb?.hide() } }
 }
