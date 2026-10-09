@@ -135,7 +135,7 @@ check("Windows engine brand assets replace upstream EXE/tray/raster artwork",
       and (d / "res" / "tray-icon.ico").read_bytes() == (HERE / "assets" / "nestra-tray.ico").read_bytes()
       and (d / "res" / "icon.png").read_bytes() == (HERE / "assets" / "icon.png").read_bytes())
 check("Connection Manager fallback avatar is branded instead of the generated coloured initial",
-      'data:image/png;base64,' in R("src/ui/cm.tis")
+      'background: transparent; color: #0A84FF' in R("src/ui/cm.tis")
       and 'string2RGB(c.name, 1)' not in R("src/ui/cm.tis"))
 viewer = R("src/nestra_viewer.rs")
 check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",

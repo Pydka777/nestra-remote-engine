@@ -24,7 +24,7 @@ Changes (all listed in CHANGES-FROM-UPSTREAM.md, AGPL section 5a):
   src/flutter.rs            Android viewer hooks: frames -> Surface (nestra_viewer::on_frame), events -> on_event,
                             both with the handler's owner token (FlutterHandler::nestra_token, appended)
 """
-import base64, pathlib, shutil, sys
+import pathlib, shutil, sys
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
 HERE = pathlib.Path(__file__).resolve().parent
@@ -82,12 +82,13 @@ for src_name, dst_name in (
 
 # Connection Manager falls back to a generated coloured initial when no account avatar exists. Replace that
 # fallback with the NESTRA Engine artwork so a live owner session never shows the upstream-style purple 'N'.
-engine_avatar = base64.b64encode((HERE / "assets" / "nestra-tray.png").read_bytes()).decode("ascii")
 edit("src/ui/cm.tis",
      '                    <div .icon style={"background: " + string2RGB(c.name, 1)}>\n'
      '                    {c.name[0].toUpperCase()}\n'
      '                    </div>',
-     f'                    <img .icon src="data:image/png;base64,{engine_avatar}" />')
+     '                    <div .icon style="background: transparent; color: #0A84FF; font-weight: 900">\n'
+     '                    N\n'
+     '                    </div>')
 after("src/lib.rs", "mod custom_server;\n",
       "/// NESTRA Remote: fixed server/key and enforced settings\npub mod nestra_config;\n"
       "/// NESTRA Remote: --nestra-session (one-time session grant on stdin)\n#[cfg(windows)]\npub mod nestra_session;\n"
