@@ -227,7 +227,7 @@ private fun ago(iso: String?): String = try {
     }
 } catch (e: Exception) { "unknown" }
 
-@Composable private fun DeviceDetails(s: UiState, vm: AppViewModel, d: RemoteDevice?) = Column(Modifier.fillMaxSize()) {
+@Composable private fun DeviceDetails(s: UiState, vm: AppViewModel, d: RemoteDevice?) = Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
     BackHandler { vm.back() }
     Header(d?.name ?: "Device", onBack = vm::back)
     Message(s.message, vm::dismissMessage)

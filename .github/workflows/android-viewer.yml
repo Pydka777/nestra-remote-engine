@@ -15,9 +15,6 @@ on:
       - '.github/workflows/android-viewer.yml'
 permissions:
   contents: read
-concurrency:
-  group: android-viewer-main
-  cancel-in-progress: true
 env:
   RUSTDESK_REPO: https://github.com/rustdesk/rustdesk
   RUSTDESK_TAG: "1.5.0"
@@ -138,6 +135,14 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: ${{ matrix.job.target }}
           components: rustfmt
+      - name: Unit tests of the NESTRA file browser / transfer rules (nestra_files.rs, host)
+        run: |
+          set -e
+          rustup toolchain install stable --profile minimal
+          mkdir -p /tmp/nestra-files-test/src
+          printf '[package]\nname = "nestra-files-test"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nserde_json = "1"\n' > /tmp/nestra-files-test/Cargo.toml
+          echo "#[path = \"$GITHUB_WORKSPACE/fork/nestra/src/nestra_files.rs\"] pub mod nestra_files;" > /tmp/nestra-files-test/src/lib.rs
+          cd /tmp/nestra-files-test && rustup run stable cargo test
       - name: Build librustdesk with the NESTRA viewer (as upstream ndk_*.sh)
         working-directory: upstream-src
         env:
@@ -156,7 +161,7 @@ jobs:
           cp upstream-src/target/${{ matrix.job.target }}/release/liblibrustdesk.so $D/libnestra_viewer.so
           cp $NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.job.libcxx }}/libc++_shared.so $D/
           # the JNI contract of NativeViewer.kt must be exported
-          for f in nativeAbiVersion nativeInit nativeConnect nativeSetSurface nativeMouse nativeSwitchDisplay nativeSendClipboard nativeToggleAudio nativeReadRemoteDir nativeTransferFile nativeKey nativeText nativeClose; do
+          for f in nativeAbiVersion nativeInit nativeConnect nativeSetSurface nativeMouse nativeSwitchDisplay nativeSendClipboard nativeToggleAudio nativeReadRemoteDir nativeTransferFile nativeCancelFileJob nativeKey nativeText nativeClose; do
             $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --defined-only $D/libnestra_viewer.so | grep -q "Java_com_nestra_remote_viewer_NativeViewer_$f" || { echo "missing JNI symbol $f"; exit 1; }
           done
           grep -a -q "remote.nestraparent.com" $D/libnestra_viewer.so
@@ -198,3 +203,55 @@ jobs:
             nestra-viewer-android.zip
             nestra-viewer-android.zip.sha256
             out/SHA256SUMS
+
+  # The NESTRA Remote Android APK built from android/ of THIS commit with the native core of THIS run (debug-signed,
+  # same applicationId). Nothing is installed or published by the workflow.
+  apk:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: nestra-viewer-android
+          path: /tmp/viewer
+      - name: Import the native core of this run (checksums verified)
+        run: |
+          set -euo pipefail
+          cd /tmp/viewer
+          sha256sum -c nestra-viewer-android.zip.sha256
+          unzip -q nestra-viewer-android.zip -d extracted
+          (cd extracted && sha256sum -c SHA256SUMS)
+          rm -rf "$GITHUB_WORKSPACE/android/app/src/main/jniLibs"
+          cp -a extracted/jniLibs "$GITHUB_WORKSPACE/android/app/src/main/"
+          mkdir -p "$GITHUB_WORKSPACE/android/app/src/main/assets/licenses"
+          cp extracted/BUILD-INFO.txt extracted/SHA256SUMS "$GITHUB_WORKSPACE/android/app/src/main/assets/licenses/"
+      - name: Core tests + debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean :core:test :app:assembleDebug -PnestraSourceUrl=https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+      - name: Verify the APK carries this run's arm64 core
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          mkdir /tmp/apk && unzip -q "$APK" 'lib/*' -d /tmp/apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cmp /tmp/apk/lib/$abi/libnestra_viewer.so /tmp/viewer/extracted/jniLibs/$abi/libnestra_viewer.so
+          done
+          VN=$(grep -o 'versionName = "[^"]*"' android/app/build.gradle.kts | cut -d'"' -f2)
+          cp "$APK" "NESTRA-Remote-v$VN-debug.apk"
+          sha256sum "NESTRA-Remote-v$VN-debug.apk" | tee "NESTRA-Remote-v$VN-debug.apk.sha256"
+          sha256sum /tmp/apk/lib/arm64-v8a/libnestra_viewer.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nestra-remote-android-apk
+          path: |
+            NESTRA-Remote-v*-debug.apk
+            NESTRA-Remote-v*-debug.apk.sha256
+            android/core/build/test-results/test/*.xml

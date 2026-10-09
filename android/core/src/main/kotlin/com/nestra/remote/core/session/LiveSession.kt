@@ -163,14 +163,20 @@ class LiveSessionController(
                     // as viewer_disconnect. On a genuine network loss this status call fails or still shows a live
                     // session, so the existing reconnect path is unchanged.
                     if (closeReason in setOf("connection_error", "engine_closed", "engine_exited")) {
-                        when (val st = api.sessionStatus(sid)) {
-                            is ApiResult.Ok -> if (st.value.state in setOf("ended", "expired", "refused")) {
-                                val reason = st.value.endReason ?: st.value.state
-                                log("viewer closed as $closeReason but server already says ${st.value.state} ($reason)")
-                                sessionId = null
-                                return final(State.Ended(reason))
+                        // The PC records local_disconnect before the viewer learns about it, but
+                        // the server status can lag behind the native transport close. Give it a
+                        // short bounded window to publish the terminal reason before any retry.
+                        repeat(12) { attempt ->
+                            when (val st = api.sessionStatus(sid)) {
+                                is ApiResult.Ok -> if (st.value.state in setOf("ended", "expired", "refused")) {
+                                    val reason = st.value.endReason ?: st.value.state
+                                    log("viewer closed as $closeReason; terminal state=${st.value.state} reason=$reason")
+                                    sessionId = null
+                                    return final(State.Ended(reason))
+                                }
+                                else -> { /* still active or network loss */ }
                             }
-                            else -> { /* network loss / live session: keep the existing end + reconnect behaviour */ }
+                            if (attempt < 11) Thread.sleep(250)
                         }
                     }
                     return end(sid, closeReason, tellViewer = false)

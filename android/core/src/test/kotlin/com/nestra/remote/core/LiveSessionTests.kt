@@ -133,6 +133,23 @@ class LiveSessionTests {
         assertTrue("phone must not overwrite the server's local_disconnect with viewer_disconnect", b.ends.isEmpty())
     }
 
+    @Test fun delayedPcDisconnectAfterTransportCloseKeepsTerminalReason() {
+        val (b, s) = world()
+        val v = FakeViewer()
+        val run = Run(controller(s, v))
+        until("requested") { b.onlySession() != null }
+        val sid = b.onlySession()!!
+        b.pc(sid, "accepted")
+        until("viewer connect") { v.target != null }
+        v.events!!.onConnected()
+        until("active") { run.c.state is State.Active }
+        v.events!!.onClosed("connection_error")
+        Thread.sleep(1300) // the PC-side terminal status can arrive after the original 1-second window
+        b.pc(sid, "ended", "local_disconnect")
+        assertEquals(State.Ended("local_disconnect"), run.join())
+        assertTrue("must not overwrite the server's terminal reason", b.ends.isEmpty())
+    }
+
     @Test fun phoneDisconnectEndsOnTheServerAndClosesTheViewer() {
         val (b, s) = world()
         val v = FakeViewer()

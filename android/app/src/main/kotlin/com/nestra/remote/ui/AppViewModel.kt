@@ -254,9 +254,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var fileListRequestId = 0
+
     fun openRemoteFiles(path: String = "") {
+        val requestId = ++fileListRequestId
         _state.update { it.copy(fileStatus = "Loading files…") }
+        if (viewer == null) {
+            _state.update { it.copy(fileStatus = "File browser unavailable: session is not active.") }
+            return
+        }
         viewer?.readRemoteDir(path)
+        viewModelScope.launch {
+            delay(10_000)
+            if (requestId == fileListRequestId && _state.value.fileStatus == "Loading files…") {
+                _state.update { it.copy(fileStatus = "No response from PC file browser. Tap Refresh to retry.") }
+                ViewerLog.w("remote file listing timed out")
+            }
+        }
     }
 
     fun openRemoteEntry(entry: RemoteFileEntry) {

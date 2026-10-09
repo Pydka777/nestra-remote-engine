@@ -9,12 +9,18 @@
 //!   void nativeSwitchDisplay(long h, int display)
 //!   void nativeSendClipboard(long h, String text)
 //!   void nativeToggleAudio(long h)
-//!   void nativeReadRemoteDir(long h, String path)
-//!   int  nativeTransferFile(long h, String from, String to, boolean remoteToLocal)
+//!   void nativeReadRemoteDir(long h, String path)          // "" = PC home, "/" = drive list, "C:\\..." = folder
+//!   int  nativeTransferFile(long h, String from, String to, boolean remoteToLocal)   // job id, -1 = refused
+//!   void nativeCancelFileJob(long h, int id)               // added in v0.4.0 (ABI stays 3: additive)
 //!   void nativeKey(long h, int androidKeyCode, boolean down)
 //!   void nativeText(long h, String text)
 //!   void nativeClose(long h)
-//!   Callback: onConnected, onResolution, onDisplays, onClipboard, onClosed
+//!   Callback: onConnected, onResolution, onDisplays, onClipboard, onFileEvent, onClosed
+//!
+//! v0.4.0 (file browser + transfer): every file operation runs on a second, FILE_TRANSFER connection to the
+//! same PC, opened on demand with the remote-desktop session's ConnToken (see nestra_files.rs for why: the PC drops
+//! file requests on a remote-desktop connection). Its events are translated by nestra_files::Jobs and delivered through
+//! onFileEvent (file_dir, file_error, job_progress, job_done, job_error). It ends with the remote-desktop session.
 //!
 //! Built on the upstream Flutter session (FlutterHandler implements the UI trait): session_add + io_loop, with two
 //! hooks in flutter.rs - decoded frames come to `on_frame` (drawn into the app's Surface, never stored), UI events
@@ -47,7 +53,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::Duration;
 
-const ABI: jint = 3;
+const ABI: jint = 3; // v0.4.0 only ADDS nativeCancelFileJob + file events: v0.3.x apps keep working
 const HANDLE_BASE: jlong = 0x4e52_0000_0000; // | generation: a stale handle never reaches a newer session
 const MAX_RETRIES: u32 = 2;
 const ERROR_GRACE: Duration = Duration::from_secs(8); // an error msgbox that does not end io_loop closes after this
@@ -143,6 +149,217 @@ struct Viewer {
     attempts: u32,
     retry: Option<bool>, // Some(force_relay): io_loop ended with a retryable error, reconnect
     last_error: Option<&'static str>,
+    engine: String,             // the PC's engine ID (needed to open the file connection)
+    files: Option<FileSession>, // the FILE_TRANSFER companion connection, opened on the first file request
+}
+
+/// The FILE_TRANSFER connection of the current remote-desktop session.
+struct FileSession {
+    session_id: SessionID,
+    session: crate::flutter::FlutterSession,
+    token: usize,
+    ready: bool,              // peer_info received: the PC accepted the file connection
+    pending: Vec<FileOp>,     // requests made before it was ready
+    jobs: crate::nestra_files::Jobs,
+    last_error: Option<String>,
+}
+
+enum FileOp {
+    Dir(String),
+    Send { id: i32, from: String, to: String, download: bool },
+}
+
+fn run_file_op(s: &crate::flutter::FlutterSession, op: FileOp) {
+    match op {
+        FileOp::Dir(path) => s.read_remote_dir(path, false),
+        FileOp::Send { id, from, to, download } => s.send_files(id, 0, from, to, 0, false, download),
+    }
+}
+
+/// Delivers one translated file event to the app (onFileEvent). Only names and ids are logged, never paths or data.
+fn emit_file(vm: usize, cb: &GlobalRef, name: &str, json: &str) {
+    if let Some(jvm) = jvm(vm) {
+        if let Ok(mut env) = jvm.attach_current_thread_as_daemon() {
+            if let (Ok(jname), Ok(jjson)) = (env.new_string(name), env.new_string(json)) {
+                let _ = env.call_method(
+                    cb.as_obj(),
+                    "onFileEvent",
+                    "(Ljava/lang/String;Ljava/lang/String;)V",
+                    &[JValue::Object(&*jname), JValue::Object(&*jjson)],
+                );
+            }
+        }
+    }
+    info(&format!("file event -> app: {name}"));
+}
+
+fn emit_file_to(gen: u64, name: &str, json: &str) {
+    let target = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone()));
+    if let Some((vm, cb)) = target {
+        emit_file(vm, &cb, name, json);
+    }
+}
+
+/// Performs the actions nestra_files produced (outside the VIEWER lock).
+fn apply_file_actions(gen: u64, session: Option<crate::flutter::FlutterSession>, actions: Vec<crate::nestra_files::Action>) {
+    use crate::nestra_files::Action;
+    for a in actions {
+        match a {
+            Action::Emit(name, json) => emit_file_to(gen, name, &json),
+            Action::SkipOverwrite { id, file_num, is_upload } => {
+                if let Some(s) = session.as_ref() {
+                    s.set_confirm_override_file(id, file_num, false, false, is_upload);
+                }
+                warn(&format!("file job {id}: target exists, skipped (never overwritten)"));
+            }
+            Action::Cancel(id) => {
+                if let Some(s) = session.as_ref() {
+                    s.cancel_job(id);
+                }
+                warn(&format!("file job {id} cancelled: unexpected file list from the PC"));
+            }
+        }
+    }
+}
+
+/// Queues or runs a file operation on the FILE_TRANSFER connection, opening it first if needed.
+fn file_op(gen: u64, op: FileOp, job: Option<(i32, bool, Option<u64>)>) -> Result<(), &'static str> {
+    let mut run_now = None;
+    {
+        let mut lock = VIEWER.lock().unwrap();
+        let Some(v) = lock.as_mut().filter(|v| v.gen == gen && !v.closing) else { return Err("no active session") };
+        if !v.logged_in {
+            return Err("the PC has not accepted the session yet");
+        }
+        if v.files.is_none() {
+            // upstream's own mechanism for a second connection of the same session (ConnToken = client session id +
+            // the password hash already derived for this session); in memory only, never logged
+            let Some(mut token) = v.session.get_conn_token() else { return Err("session token unavailable") };
+            let fid = uuid::Uuid::new_v4();
+            let added = crate::flutter::session_add(&fid, &v.engine, true, false, false, false, false, "", false, String::new(), false, Some(token.clone()));
+            unsafe { token.as_bytes_mut().iter_mut().for_each(|b| *b = b'0') };
+            drop(token);
+            let fs = match added {
+                Ok(s) => s,
+                Err(e) => {
+                    warn(&format!("file connection could not be created: {e}"));
+                    return Err("file connection could not be created");
+                }
+            };
+            let token = fs.ui_handler.nestra_token();
+            v.files = Some(FileSession {
+                session_id: fid,
+                session: fs,
+                token,
+                ready: false,
+                pending: Vec::new(),
+                jobs: Default::default(),
+                last_error: None,
+            });
+            info(&format!("file connection (FILE_TRANSFER) opening for gen {gen}"));
+            std::thread::spawn(move || file_drive(gen, fid));
+        }
+        let f = v.files.as_mut().unwrap();
+        if let Some((id, upload, total)) = job {
+            f.jobs.start(id, upload, total);
+        }
+        if f.ready {
+            run_now = Some((f.session.clone(), op));
+        } else {
+            f.pending.push(op);
+            info(&format!("file request queued until the file connection is ready ({} pending)", f.pending.len()));
+        }
+    }
+    if let Some((s, op)) = run_now {
+        run_file_op(&s, op);
+    }
+    Ok(())
+}
+
+/// io_loop of the FILE_TRANSFER connection; when it ends, pending requests and running jobs fail with a clear message.
+fn file_drive(gen: u64, fid: SessionID) {
+    let s = {
+        let lock = VIEWER.lock().unwrap();
+        match lock.as_ref().and_then(|v| v.files.as_ref().filter(|f| v.gen == gen && f.session_id == fid)) {
+            Some(f) => (*f.session).clone(),
+            None => return,
+        }
+    };
+    let round = s.connection_round_state.lock().unwrap().new_round();
+    info(&format!("file connection io_loop start: gen {gen} round {round}"));
+    crate::ui_session_interface::io_loop(s, round);
+    let (actions, was_ready) = {
+        let mut lock = VIEWER.lock().unwrap();
+        let Some(v) = lock.as_mut().filter(|v| v.gen == gen) else { return };
+        if !matches!(v.files.as_ref(), Some(f) if f.session_id == fid) {
+            return; // already replaced / closed with the session
+        }
+        let mut f = v.files.take().unwrap();
+        let why = f.last_error.clone().unwrap_or_else(|| "File connection to the PC closed".to_owned());
+        let mut actions = f.jobs.fail_all(&why);
+        if !f.ready || !f.pending.is_empty() {
+            actions.push(crate::nestra_files::file_error("session", 0, &why));
+        }
+        (actions, f.ready)
+    };
+    info(&format!("file connection ended: gen {gen} ready_before={was_ready}"));
+    crate::flutter_ffi::session_close(fid);
+    apply_file_actions(gen, None, actions);
+}
+
+/// Events of the FILE_TRANSFER connection.
+fn on_file_event(gen: u64, name: &str, e: &serde_json::Value, json: &str) {
+    match name {
+        "peer_info" => {
+            let (session, ops) = {
+                let mut lock = VIEWER.lock().unwrap();
+                let Some(f) = lock.as_mut().filter(|v| v.gen == gen).and_then(|v| v.files.as_mut()) else { return };
+                if f.ready {
+                    return;
+                }
+                f.ready = true;
+                (f.session.clone(), std::mem::take(&mut f.pending))
+            };
+            info(&format!("file connection ready (accepted by the PC); running {} queued request(s)", ops.len()));
+            for op in ops {
+                run_file_op(&session, op);
+            }
+        }
+        "msgbox" => {
+            let (t, text) = (field(e, "type"), field(e, "text"));
+            let title = field(e, "title");
+            warn(&format!("file connection msgbox type='{t}' title='{title}'"));
+            let fatal = t == "error"
+                || t.starts_with("insecure-connection")
+                || matches!(t, "input-password" | "re-input-password" | "session-login" | "session-re-login" | "session-login-password");
+            if fatal {
+                let fid = {
+                    let mut lock = VIEWER.lock().unwrap();
+                    let Some(f) = lock.as_mut().filter(|v| v.gen == gen).and_then(|v| v.files.as_mut()) else { return };
+                    f.last_error = Some(if t == "error" && !text.is_empty() {
+                        crate::nestra_files::short(text)
+                    } else if t.starts_with("insecure") {
+                        "The file connection is not end-to-end encrypted; refused".to_owned()
+                    } else {
+                        "The PC did not accept the file connection".to_owned()
+                    });
+                    f.session_id
+                };
+                // ends its io_loop; file_drive reports to the app and cleans up (the remote desktop is not touched)
+                crate::flutter_ffi::session_close(fid);
+            }
+        }
+        _ => {
+            let (session, actions) = {
+                let mut lock = VIEWER.lock().unwrap();
+                let Some(f) = lock.as_mut().filter(|v| v.gen == gen).and_then(|v| v.files.as_mut()) else { return };
+                (f.session.clone(), f.jobs.handle(name, e, json))
+            };
+            if !actions.is_empty() {
+                apply_file_actions(gen, Some(session), actions);
+            }
+        }
+    }
 }
 
 lazy_static::lazy_static! {
@@ -182,6 +399,10 @@ fn closed(gen: u64, reason: &str) {
     ));
     if v.window != 0 {
         unsafe { ANativeWindow_release(v.window as *mut c_void) };
+    }
+    if let Some(f) = v.files.as_ref() {
+        // the file connection never outlives its remote-desktop session
+        crate::flutter_ffi::session_close(f.session_id);
     }
     crate::flutter_ffi::session_close(v.session_id);
     if !v.closing {
@@ -327,6 +548,11 @@ pub fn on_login_secret(preset: &str, last_password_set: bool) {
 pub fn on_event(token: usize, json: &str) {
     let Ok(e) = serde_json::from_str::<serde_json::Value>(json) else { return };
     let name = field(&e, "name");
+    let file_gen = VIEWER.lock().unwrap().as_ref().and_then(|v| v.files.as_ref().filter(|f| f.token == token).map(|_| v.gen));
+    if let Some(gen) = file_gen {
+        on_file_event(gen, name, &e, json);
+        return;
+    }
     let (session, gen) = match VIEWER.lock().unwrap().as_ref() {
         Some(v) if v.token == token => (v.session.clone(), v.gen),
         Some(_) => {
@@ -413,24 +639,8 @@ pub fn on_event(token: usize, json: &str) {
                 warn("clipboard received but refused: content too large");
             }
         }
-        "file_dir" | "empty_dirs" | "job_progress" | "job_done" | "job_error" => {
-            let target = VIEWER.lock().unwrap().as_ref().filter(|v| v.gen == gen).map(|v| (v.vm, v.cb.clone()));
-            if let Some((vm, cb)) = target {
-                if let Some(jvm) = jvm(vm) {
-                    if let Ok(mut env) = jvm.attach_current_thread_as_daemon() {
-                        if let (Ok(jname), Ok(jjson)) = (env.new_string(name), env.new_string(json)) {
-                            let _ = env.call_method(
-                                cb.as_obj(),
-                                "onFileEvent",
-                                "(Ljava/lang/String;Ljava/lang/String;)V",
-                                &[JValue::Object(&*jname), JValue::Object(&*jjson)],
-                            );
-                        }
-                    }
-                }
-            }
-            info(&format!("file event {name}"));
-        }
+        // file events never come from the remote-desktop connection (see nestra_files.rs); ignore any stray ones
+        "file_dir" | "empty_dirs" | "job_progress" | "job_done" | "job_error" => info(&format!("file event '{name}' on the remote-desktop connection ignored")),
         "connection_ready" => {
             // transport chosen by the client: secure (E2EE), direct (P2P) or relay, stream type (TCP/UDP/WebRTC)
             info(&format!("connection_ready: {}", json.chars().take(200).collect::<String>()));
@@ -564,6 +774,8 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeConnect(
         attempts: 0,
         retry: None,
         last_error: None,
+        engine: engine.clone(),
+        files: None,
     });
     std::thread::spawn(move || drive(gen));
     info(&format!("session_add ok: gen {gen}; io_loop thread started"));
@@ -675,14 +887,22 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeToggleAu
 
 #[no_mangle]
 pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeReadRemoteDir(mut env: JNIEnv, _c: JClass, h: jlong, path: JString) {
+    let Some(gen) = gen_of(h) else { return };
     let Ok(path) = env.get_string(&path) else { return };
     let path: String = path.into();
-    let safe_path = if path.is_empty() { "<PC home>" } else { "<selected directory>" };
+    let safe_path = match path.as_str() { "" => "<PC home>", "/" => "<drive list>", _ => "<selected directory>" };
     info(&format!("file directory request: {safe_path}"));
-    if with_session(h, |s| s.read_remote_dir(path, false)) {
-        info("file directory request handed to RustDesk session");
-    } else {
-        warn("file directory request rejected: no active native session");
+    if !crate::nestra_files::remote_dir_allowed(&path) {
+        warn("file directory request refused: not an absolute Windows path (or contains '..')");
+        apply_file_actions(gen, None, vec![crate::nestra_files::file_error("dir", 0, "This folder path is not allowed")]);
+        return;
+    }
+    match file_op(gen, FileOp::Dir(path), None) {
+        Ok(()) => info("file directory request handed to the file connection"),
+        Err(why) => {
+            warn(&format!("file directory request rejected: {why}"));
+            apply_file_actions(gen, None, vec![crate::nestra_files::file_error("dir", 0, &format!("Files are not available: {why}"))]);
+        }
     }
 }
 
@@ -695,17 +915,57 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeTransfer
     to: JString,
     remote_to_local: jboolean,
 ) -> jint {
+    let Some(gen) = gen_of(h) else { return -1 };
     let Ok(from) = env.get_string(&from) else { return -1 };
     let Ok(to) = env.get_string(&to) else { return -1 };
     let from: String = from.into();
     let to: String = to.into();
-    if from.is_empty() || to.is_empty() { return -1; }
-    let id = FILE_JOB_ID.fetch_add(1, Ordering::Relaxed).max(1000);
-    if !with_session(h, |s| s.send_files(id, 0, from, to, 0, false, remote_to_local != 0)) {
-        return -1;
+    let download = remote_to_local != 0;
+    let refuse = |why: &str| {
+        warn(&format!("file transfer refused: {why}"));
+        apply_file_actions(gen, None, vec![crate::nestra_files::file_error("transfer", -1, why)]);
+        -1
+    };
+    // phone side: only this app's own storage; PC side: one absolute file path without '..'
+    let (local, remote) = if download { (&to, &from) } else { (&from, &to) };
+    if !crate::nestra_files::local_path_allowed(local) {
+        return refuse("Local file location is not allowed");
     }
-    info(&format!("file transfer started: job={id} direction={}", if remote_to_local != 0 { "download" } else { "upload" }));
-    id
+    if !crate::nestra_files::remote_file_allowed(remote) {
+        return refuse("PC file path is not allowed");
+    }
+    let total = if download {
+        None
+    } else {
+        match std::fs::metadata(local) {
+            Ok(m) if m.is_file() => Some(m.len()),
+            _ => return refuse("The file to upload is not readable"),
+        }
+    };
+    let id = FILE_JOB_ID.fetch_add(1, Ordering::Relaxed).max(1000);
+    match file_op(gen, FileOp::Send { id, from, to, download }, Some((id, !download, total))) {
+        Ok(()) => {
+            info(&format!("file transfer started: job={id} direction={}", if download { "download" } else { "upload" }));
+            id
+        }
+        Err(why) => refuse(&format!("Files are not available: {why}")),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeCancelFileJob(_e: JNIEnv, _c: JClass, h: jlong, id: jint) {
+    let Some(gen) = gen_of(h) else { return };
+    let session = {
+        let mut lock = VIEWER.lock().unwrap();
+        let Some(f) = lock.as_mut().filter(|v| v.gen == gen).and_then(|v| v.files.as_mut()) else { return };
+        if f.jobs.remove(id).is_none() {
+            return;
+        }
+        f.session.clone()
+    };
+    session.cancel_job(id);
+    info(&format!("file job {id} cancelled by the user"));
+    emit_file_to(gen, "job_error", &serde_json::json!({"id": id, "message": "Cancelled", "cancelled": true}).to_string());
 }
 
 #[no_mangle]

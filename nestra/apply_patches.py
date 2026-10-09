@@ -65,7 +65,7 @@ if "nestra_config" in (ROOT / "src" / "lib.rs").read_text(encoding="utf-8"):
     sys.exit("ALREADY PATCHED: start from a clean checkout of the pinned upstream commit")
 
 # ---------------------------------------------------------------------------------------------- new modules + Windows branding
-for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs"):
+for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs", "nestra_files.rs"):
     shutil.copy(HERE / "src" / f, ROOT / "src" / f)
 # Brand all Windows engine surfaces: EXE icon, native tray icon and raster/UI artwork.
 for src_name, dst_name in (
@@ -92,7 +92,9 @@ edit("src/ui/cm.tis",
 after("src/lib.rs", "mod custom_server;\n",
       "/// NESTRA Remote: fixed server/key and enforced settings\npub mod nestra_config;\n"
       "/// NESTRA Remote: --nestra-session (one-time session grant on stdin)\n#[cfg(windows)]\npub mod nestra_session;\n"
-      "/// NESTRA Remote: JNI viewer for the NESTRA Remote Android app\n#[cfg(target_os = \"android\")]\npub mod nestra_viewer;\n")
+      "/// NESTRA Remote: JNI viewer for the NESTRA Remote Android app\n#[cfg(target_os = \"android\")]\npub mod nestra_viewer;\n"
+      "/// NESTRA Remote: file browser / transfer rules of the Android viewer (FILE_TRANSFER companion connection)\n"
+      "#[cfg(target_os = \"android\")]\npub mod nestra_files;\n")
 
 # ---------------------------------------------------------------------------------------------- hbb_common
 CFG = "libs/hbb_common/src/config.rs"
@@ -151,11 +153,19 @@ edit(IPC,
      '                    // NESTRA Remote: "1" = rotate the temporary password away + close every connection; acknowledged\n'
      '                    if value == "1" {\n'
      '                        password::update_temporary_password();\n'
+     '                        // and no "recent session" re-login (remote desktop or file transfer) after the end\n'
+     '                        crate::server::nestra_forget_sessions();\n'
      '                    }\n'
      '                    crate::server::NESTRA_CLOSE.store(value == "1", std::sync::atomic::Ordering::SeqCst);\n'
      '                    allow_err!(stream.send(&Data::Config((name.clone(), Some(value.clone())))).await);\n'
      '                } else if name == "temporary-password" {\n'
      '                    password::update_temporary_password();\n')
+
+# a NESTRA session end also forgets upstream's "recent sessions" (30 s re-login without the password): the grant is
+# one-time, so neither a reconnect nor a FILE_TRANSFER companion connection may outlive the session that it served
+append("src/server/connection.rs",
+       "\n/// NESTRA Remote: forget every recent session (called on \"nestra-close\" = 1, i.e. when a NESTRA session ends).\n"
+       "pub fn nestra_forget_sessions() {\n    SESSIONS.lock().unwrap().clear();\n}\n")
 
 # login check on the PC: which temporary password (fingerprint only) the engine service compared against
 edit("src/server/connection.rs",

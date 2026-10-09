@@ -18,7 +18,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // codes, account data and device lists are not for screenshots, screen recording or the recents thumbnail
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         handle(intent)
         setContent { NestraRemoteTheme { AppRoot(vm) } }
     }

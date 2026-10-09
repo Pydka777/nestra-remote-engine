@@ -129,7 +129,8 @@ check("android hooks carry the handler token", "nestra_viewer::on_frame(self.nes
 check("FlutterHandler::nestra_token appended (android only, from the shared session_handlers Arc)",
       fl.rstrip().endswith("}") and "impl FlutterHandler {\n    pub fn nestra_token(&self) -> usize {\n        Arc::as_ptr(&self.session_handlers)" in fl
       and fl.count("#[cfg(target_os = \"android\")]\nimpl FlutterHandler") == 1)
-check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs")))
+check("new modules copied", all((d / "src" / f).exists() for f in ("nestra_config.rs", "nestra_session.rs", "nestra_viewer.rs", "nestra_files.rs")))
+check("nestra_files registered for Android only", '#[cfg(target_os = "android")]\npub mod nestra_files;' in R("src/lib.rs"))
 check("Windows engine brand assets replace upstream EXE/tray/raster artwork",
       (d / "res" / "icon.ico").read_bytes() == (HERE / "assets" / "nestra-tray.ico").read_bytes()
       and (d / "res" / "tray-icon.ico").read_bytes() == (HERE / "assets" / "nestra-tray.ico").read_bytes()
@@ -138,8 +139,8 @@ check("Connection Manager fallback avatar is branded instead of the generated co
       'background: transparent; color: #0A84FF' in R("src/ui/cm.tis")
       and 'string2RGB(c.name, 1)' not in R("src/ui/cm.tis"))
 viewer = R("src/nestra_viewer.rs")
-check("Android viewer ABI 3 exposes ETAP 10 collaboration JNI",
-      "const ABI: jint = 3;" in viewer
+check("Android viewer ABI 3 (additive) exposes ETAP 10 collaboration JNI + file job cancel",
+      "const ABI: jint = 3;" in viewer and "nativeCancelFileJob" in viewer
       and "nativeSwitchDisplay" in viewer and "nativeSendClipboard" in viewer
       and "nativeToggleAudio" in viewer and "nativeReadRemoteDir" in viewer and "nativeTransferFile" in viewer)
 check("multi-monitor renderer follows the selected display, not hard-coded display 0",
@@ -151,8 +152,19 @@ check("display-count callback is edge-triggered, not repeated for identical sync
       and "display list changed" in viewer)
 check("stale JNI handles cannot act on a newer session or fake a file-transfer start",
       "filter(|v| v.gen == gen && !v.closing)" in viewer
-      and "if !with_session(h, |s| s.send_files" in viewer
-      and "return -1;" in viewer.split("nativeTransferFile", 1)[1])
+      and "let Some(gen) = gen_of(h) else { return -1 };" in viewer.split("fn Java_com_nestra_remote_viewer_NativeViewer_nativeTransferFile", 1)[1])
+tf = viewer.split("fn Java_com_nestra_remote_viewer_NativeViewer_nativeTransferFile", 1)[1].split("#[no_mangle]", 1)[0]
+check("file transfers check the phone path (app storage only) and the PC path (absolute, no '..') before starting",
+      "local_path_allowed(local)" in tf and "remote_file_allowed(remote)" in tf
+      and tf.index("local_path_allowed") < tf.index("file_op("))
+check("file operations run on a FILE_TRANSFER companion connection opened with the session's ConnToken",
+      "get_conn_token()" in viewer and "session_add(&fid, &v.engine, true," in viewer
+      and "s.read_remote_dir(path, false)" in viewer.split("fn run_file_op", 1)[1].split("\n}\n", 1)[0])
+check("the file connection closes with its remote-desktop session",
+      "crate::flutter_ffi::session_close(f.session_id);" in viewer.split("fn closed(", 1)[1].split("\n}\n", 1)[0])
+check("a NESTRA session end forgets upstream's recent sessions (no password-less re-login afterwards)",
+      "pub fn nestra_forget_sessions()" in R("src/server/connection.rs")
+      and "crate::server::nestra_forget_sessions();" in ipc.split('name == "nestra-close"')[1].split('name == "temporary-password"')[0])
 check("privileged engine settings stay fail-closed while ETAP 10 owner tools are allowed",
       '("enable-audio", "Y")' in R("src/nestra_config.rs")
       and '("enable-file-transfer", "Y")' in R("src/nestra_config.rs")
