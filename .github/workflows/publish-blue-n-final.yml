@@ -1,0 +1,35 @@
+name: publish-blue-n-final
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/publish-blue-n-final.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: blue-n-final-94487df
+      WIN_RUN: "37964892572"
+    steps:
+      - name: Download verified Engine artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$WIN_RUN" -R "$REPO" -n nestra-remote-engine-windows-x86 -D dist
+          cd dist
+          sha256sum -c nestra-remote-engine-windows-x86.zip.sha256
+      - name: Publish
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$REPO" --prerelease --title "NESTRA Remote Engine Blue N FINAL 94487df" --notes "Verified Windows Engine artifact from successful run $WIN_RUN."
+          fi
+          gh release upload "$TAG" -R "$REPO" --clobber             dist/nestra-remote-engine-windows-x86.zip             dist/nestra-remote-engine-windows-x86.zip.sha256
