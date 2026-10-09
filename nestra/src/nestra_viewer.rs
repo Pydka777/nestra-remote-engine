@@ -337,10 +337,21 @@ pub fn on_event(token: usize, json: &str) {
     match name {
         // the PC accepted the grant (login ok): ask for display 0 (what upstream's UI does on start)
         "peer_info" => {
-            info(&format!("peer_info: gen {gen} logged in (grant accepted by the PC); requesting display 0"));
-            if let Some(v) = VIEWER.lock().unwrap().as_mut().filter(|v| v.gen == gen) {
-                v.logged_in = true;
+            let first_login = {
+                let mut lock = VIEWER.lock().unwrap();
+                match lock.as_mut().filter(|v| v.gen == gen) {
+                    Some(v) if !v.logged_in => { v.logged_in = true; true }
+                    Some(_) => false,
+                    None => return,
+                }
+            };
+            if !first_login {
+                // Upstream may emit peer_info again after switch_display/refresh_video. Re-running those calls here
+                // creates a feedback loop (peer_info -> switch_display -> peer_info) and can starve the first frame.
+                info(&format!("duplicate peer_info ignored for gen {gen}"));
+                return;
             }
+            info(&format!("peer_info: gen {gen} logged in (grant accepted by the PC); requesting display 0 once"));
             let displays = field(&e, "displays");
             if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(displays) {
                 let count = list.len().max(1) as jint;

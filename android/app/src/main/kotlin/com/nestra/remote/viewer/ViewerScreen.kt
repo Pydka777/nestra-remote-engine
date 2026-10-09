@@ -2,6 +2,7 @@ package com.nestra.remote.viewer
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Configuration
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
@@ -87,6 +89,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var filesVisible by remember { mutableStateOf(false) }
     var currentDisplay by remember { mutableStateOf(0) }
     val context = LocalContext.current
+    val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val uploadPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.uploadUri(uri)
     }
@@ -95,18 +98,32 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         if (sessionBarVisible) {
-            Row(Modifier.fillMaxWidth().background(Color(0xFFB00020)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (st is State.Active) "REMOTE SESSION ACTIVE · $pcName" else "Connecting to $pcName…",
-                    color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                if (st is State.Active) {
+            Row(
+                Modifier.fillMaxWidth().background(Color(0xFFB00020)).padding(horizontal = if (portrait) 8.dp else 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (st is State.Active) (if (portrait) "REMOTE ACTIVE" else "REMOTE SESSION ACTIVE · $pcName") else "Connecting…",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = if (portrait) 12.sp else 14.sp,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1
+                )
+                if (st is State.Active && !portrait) {
                     OutlinedButton(onClick = { touchpadMode = !touchpadMode }) { Text(if (touchpadMode) "Touchpad" else "Direct", color = Color.White) }
                     OutlinedButton(onClick = { dragMode = !dragMode }, modifier = Modifier.padding(start = 6.dp)) { Text(if (dragMode) "Drag ON" else "Drag", color = Color.White) }
                     OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.padding(start = 6.dp)) { Text("Keyboard", color = Color.White) }
+                }
+                if (st is State.Active) {
                     OutlinedButton(onClick = { toolsVisible = !toolsVisible }, modifier = Modifier.padding(start = 6.dp)) { Text("Tools", color = Color.White) }
                     OutlinedButton(onClick = { sessionBarVisible = false; toolsVisible = false; filesVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
                 }
-                Button(onClick = { vm.disconnectSession("disconnect-button") }, colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                    modifier = Modifier.padding(start = 8.dp)) { Text("DISCONNECT", color = Color(0xFFB00020)) }
+                Button(
+                    onClick = { vm.disconnectSession("disconnect-button") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    modifier = Modifier.padding(start = 6.dp)
+                ) { Text(if (portrait) "X" else "DISCONNECT", color = Color(0xFFB00020)) }
             }
         }
         Box(
@@ -284,6 +301,17 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         .padding(10.dp)
                 ) {
                     Text("TOOLS", color = Color.White, fontWeight = FontWeight.Bold)
+                    if (portrait) {
+                        OutlinedButton(onClick = { touchpadMode = !touchpadMode }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            Text(if (touchpadMode) "Touchpad" else "Direct", color = Color.White)
+                        }
+                        OutlinedButton(onClick = { dragMode = !dragMode }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            Text(if (dragMode) "Drag ON" else "Drag", color = Color.White)
+                        }
+                        OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            Text("Keyboard", color = Color.White)
+                        }
+                    }
                     OutlinedButton(onClick = { vm.viewer?.toggleAudio(); audioOn = !audioOn }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                         Text(if (audioOn) "Audio ON" else "Audio OFF", color = Color.White)
                     }
