@@ -84,14 +84,10 @@ for src_name, dst_name in (
 # fallback with the NESTRA Engine artwork so a live owner session never shows the upstream-style purple 'N'.
 engine_avatar = base64.b64encode((HERE / "assets" / "128x128.png").read_bytes()).decode("ascii")
 edit("src/ui/cm.tis",
-     '                    {c.avatar ?\n'
-     '                    <img .icon src={c.avatar} /> :\n'
      '                    <div .icon style={"background: " + string2RGB(c.name, 1)}>\n'
      '                    {c.name[0].toUpperCase()}\n'
-     '                    </div>}\n',
-     '                    {c.avatar ?\n'
-     '                    <img .icon src={c.avatar} /> :\n'
-     f'                    <img .icon src="data:image/png;base64,{engine_avatar}" />}\n')
+     '                    </div>',
+     f'                    <img .icon src="data:image/png;base64,{engine_avatar}" />')
 after("src/lib.rs", "mod custom_server;\n",
       "/// NESTRA Remote: fixed server/key and enforced settings\npub mod nestra_config;\n"
       "/// NESTRA Remote: --nestra-session (one-time session grant on stdin)\n#[cfg(windows)]\npub mod nestra_session;\n"
