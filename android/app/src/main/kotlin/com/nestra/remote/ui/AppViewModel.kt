@@ -387,8 +387,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancelTransfer() {
         val t = _state.value.transfer ?: return
-        viewer?.cancelFileJob(t.id)
         _state.update { it.copy(fileStatus = "Cancelling…") }
+        viewer?.cancelFileJob(t.id)
         // Native cancellation normally emits job_error. Do not leave the UI stuck
         // if the callback is lost while the companion file channel is closing.
         viewModelScope.launch {
