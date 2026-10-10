@@ -356,7 +356,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(fileStatus = "Could not read the selected file.") }
             return@launch
         }
-        val remote = if (base.endsWith("\") || base.endsWith("/")) base + remoteName else "$base\$remoteName"
+        val remote = if (base.endsWith("\\") || base.endsWith("/")) base + remoteName else "$base\\$remoteName"
         val id = viewer?.transferFile(local.absolutePath, remote, false) ?: -1
         if (id >= 0) {
             transfers[id] = PendingTransfer(remoteName, true, local)
@@ -371,7 +371,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!entry.isFile || busyWithTransfer()) return
         val app = getApplication<Application>()
         val base = _state.value.remotePath
-        val remote = if (base.endsWith("\") || base.endsWith("/")) base + entry.name else "$base\${entry.name}"
+        val remote = if (base.endsWith("\\") || base.endsWith("/")) base + entry.name else "$base\\${entry.name}"
         // received into this app's own folder first (the only place the native core writes), then exported
         val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "incoming").apply { mkdirs() }
         val localName = RemoteFiles.safeName(entry.name)
