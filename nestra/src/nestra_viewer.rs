@@ -972,6 +972,19 @@ pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeCancelFi
 pub extern "system" fn Java_com_nestra_remote_viewer_NativeViewer_nativeKey(_e: JNIEnv, _c: JClass, h: jlong, code: jint, down: jboolean) {
     // android.view.KeyEvent codes -> upstream key names (as the upstream mobile UI sends them)
     let name = match code {
+        62 => "VK_SPACE",
+        131 => "VK_F1",
+        132 => "VK_F2",
+        133 => "VK_F3",
+        134 => "VK_F4",
+        135 => "VK_F5",
+        136 => "VK_F6",
+        137 => "VK_F7",
+        138 => "VK_F8",
+        139 => "VK_F9",
+        140 => "VK_F10",
+        141 => "VK_F11",
+        142 => "VK_F12",
         67 => "VK_BACK",
         66 => "VK_RETURN",
         111 => "VK_ESCAPE",

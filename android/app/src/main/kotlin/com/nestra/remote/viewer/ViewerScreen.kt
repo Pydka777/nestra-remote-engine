@@ -443,7 +443,7 @@ private fun KeyboardInput(vm: AppViewModel, onClose: () -> Unit, modifier: Modif
             },
             modifier = Modifier.size(1.dp).align(Alignment.BottomStart).focusRequester(focus).onKeyEvent { e ->
                 val n = e.nativeKeyEvent
-                if (n.keyCode in listOf(KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                if (n.keyCode in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 || n.keyCode == KeyEvent.KEYCODE_SPACE || n.keyCode in listOf(KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
                         KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_TAB)) {
                     vm.viewer?.key(n.keyCode, n.action == KeyEvent.ACTION_DOWN); true
                 } else false
