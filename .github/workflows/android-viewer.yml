@@ -8,7 +8,7 @@ name: android-viewer
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, fix/android-keyboard-20261101 ]
     paths:
       - 'nestra/**'
       - 'android/**'
