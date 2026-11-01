@@ -38,6 +38,15 @@ class PairingInputTests {
                 "nestra://pair/gt0v780e1tynzcy9czjz2mrpji"))
             assertNull(bad, PairingInput.pairingIdFromQr(bad))
     }
+    @Test fun scannedQrAcceptsOnlyExactPayloadAndMasksCode() {
+        val q = PairingInput.pairingFromQr("nestra://pair/$LAPTOP?code=123456")!!
+        assertEquals(LAPTOP, q.pairingId); assertEquals("123456", q.code)
+        assertFalse(q.toString().contains("123456"))
+        assertNull(PairingInput.pairingFromQr("nestra://pair/$LAPTOP?code=123456&other=1"))
+        assertNull(PairingInput.pairingFromQr("nestra://pair/$LAPTOP?code=12345"))
+        assertNull(PairingInput.pairingFromQr("https://evil.example/pair/$LAPTOP?code=123456"))
+        assertNull(PairingInput.pairingFromQr("nestra://pair/$LAPTOP")!!.code)
+    }
     @Test fun codeIsSixDigitsAndNeverPrinted() {
         assertEquals("123456", PairingInput.normalizeCode("123 456")); assertEquals("123456", PairingInput.normalizeCode("123-456"))
         for (bad in listOf("12345", "1234567", "12a456", "", "١٢٣٤٥٦")) assertNull(PairingInput.normalizeCode(bad))

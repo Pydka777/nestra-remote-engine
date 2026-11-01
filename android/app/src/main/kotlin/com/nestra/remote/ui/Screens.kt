@@ -281,7 +281,7 @@ private fun ago(iso: String?): String = try {
                 return@Column
             }
             Text("1. On the PC, open NESTRA Remote and choose \"Pair this PC\" (Windows asks for administrator approval).", color = NrColors.Text)
-            Text("2. Scan the QR code on the PC (optional) and type the 6-digit code it shows. The code is valid for 5 minutes and works once.", color = NrColors.Text)
+            Text("2. Scan the QR code on the PC or enter its 6-digit code. Compare the code before continuing. The code is valid for 5 minutes and works once.", color = NrColors.Text)
             if (s.pairingId != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Badge("PC selected from QR", NrColors.Accent)
@@ -291,7 +291,7 @@ private fun ago(iso: String?): String = try {
                 OutlinedButton(onClick = {
                     val opts = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
                     GmsBarcodeScanning.getClient(ctx, opts).startScan()
-                        .addOnSuccessListener { b -> b.rawValue?.let { raw -> PairingInput.pairingIdFromQr(raw) }?.let { id -> vm.pairingLink(id) } }
+                        .addOnSuccessListener { b -> b.rawValue?.let { raw -> PairingInput.pairingFromQr(raw) }?.let { qr -> code = qr.code ?: ""; vm.pairingLink(qr.pairingId) } }
                 }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR on the PC") }
             }
             OutlinedTextField(code, { v -> code = v.filter { it.isDigit() }.take(6) }, Modifier.fillMaxWidth(), label = { Text("6-digit code from the PC") },
