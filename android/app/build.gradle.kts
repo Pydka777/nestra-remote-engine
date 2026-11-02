@@ -62,3 +62,23 @@ dependencies {
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     testImplementation("junit:junit:4.13.2")
 }
+
+// The viewer is built separately. Never package an APK that silently omits it.
+val verifyNativeViewerLibraries = tasks.register("verifyNativeViewerLibraries") {
+    doLast {
+        val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        val libraries = listOf("libnestra_viewer.so", "libc++_shared.so")
+        val missing = abis.flatMap { abi ->
+            libraries.map { library -> file("src/main/jniLibs/$abi/$library") }
+        }.filterNot { it.isFile && it.length() > 0 }
+        check(missing.isEmpty()) {
+            "Native viewer libraries are missing: ${missing.joinToString()}. Build or obtain the verified viewer artifact before packaging."
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "packageDebug" || name == "packageRelease") {
+        dependsOn(verifyNativeViewerLibraries)
+    }
+}
