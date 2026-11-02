@@ -11,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -89,6 +91,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
     var sessionBarVisible by remember { mutableStateOf(true) }
     var toolsVisible by remember { mutableStateOf(false) }
     var filesVisible by remember { mutableStateOf(false) }
+    var functionKeysVisible by remember { mutableStateOf(false) }
     var currentDisplay by remember { mutableStateOf(0) }
     val context = LocalContext.current
     val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
@@ -119,7 +122,7 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                 }
                 if (st is State.Active) {
                     OutlinedButton(onClick = { toolsVisible = !toolsVisible }, modifier = Modifier.padding(start = 6.dp)) { Text("Tools", color = Color.White) }
-                    OutlinedButton(onClick = { sessionBarVisible = false; toolsVisible = false; filesVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
+                    OutlinedButton(onClick = { sessionBarVisible = false; toolsVisible = false; filesVisible = false; functionKeysVisible = false }, modifier = Modifier.padding(start = 6.dp)) { Text("Hide", color = Color.White) }
                 }
                 Button(
                     onClick = { vm.disconnectSession("disconnect-button") },
@@ -294,6 +297,24 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                     drawPath(q, Color.White)
                 }
             }
+            if (functionKeysVisible && st is State.Active) {
+                Row(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                        .background(Color(0xEE16191D)).horizontalScroll(rememberScrollState()).padding(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (number in 1..12) {
+                        val code = KeyEvent.KEYCODE_F1 + number - 1
+                        OutlinedButton(onClick = {
+                            vm.viewer?.let { it.key(code, true); it.key(code, false) }
+                        }, modifier = Modifier.padding(end = 4.dp)) { Text("F$number", color = Color.White) }
+                    }
+                    OutlinedButton(onClick = {
+                        vm.viewer?.let { it.key(KeyEvent.KEYCODE_SPACE, true); it.key(KeyEvent.KEYCODE_SPACE, false) }
+                    }, modifier = Modifier.padding(end = 4.dp)) { Text("Space", color = Color.White) }
+                    OutlinedButton(onClick = { functionKeysVisible = false }) { Text("Close", color = Color.White) }
+                }
+            }
             if (toolsVisible && st is State.Active) {
                 Column(
                     Modifier
@@ -313,6 +334,9 @@ fun ViewerScreen(s: UiState, vm: AppViewModel, pcName: String) {
                         OutlinedButton(onClick = { keyboard = !keyboard }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             Text("Keyboard", color = Color.White)
                         }
+                    }
+                    OutlinedButton(onClick = { functionKeysVisible = true; toolsVisible = false }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                        Text("Function keys", color = Color.White)
                     }
                     OutlinedButton(onClick = { vm.viewer?.toggleAudio(); audioOn = !audioOn }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                         Text(if (audioOn) "Audio ON" else "Audio OFF", color = Color.White)
